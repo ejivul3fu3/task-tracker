@@ -1,4 +1,4 @@
-[index.html](https://github.com/user-attachments/files/28711405/index.html)
+[index.html](https://github.com/user-attachments/files/28711460/index.html)
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -98,33 +98,35 @@ body {
 /* Tabs */
 .tabs {
   display: flex;
-  gap: 4px;
-  padding: 1rem 1.5rem 0;
+  gap: 8px;
+  padding: 12px 1rem;
   overflow-x: auto;
   scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
   border-bottom: 1px solid var(--border);
 }
 .tabs::-webkit-scrollbar { display: none; }
 .tab {
   flex-shrink: 0;
-  padding: 8px 16px;
-  font-size: 13px;
+  padding: 10px 18px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--text2);
-  border-radius: 8px 8px 0 0;
+  border-radius: 20px;
   cursor: pointer;
-  border: 1px solid transparent;
-  border-bottom: none;
+  border: 1px solid var(--border);
   transition: all 0.2s;
   background: transparent;
+  white-space: nowrap;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
 }
 .tab:hover { color: var(--text); background: var(--bg2); }
 .tab.active {
   color: var(--purple-l);
-  background: var(--bg2);
-  border-color: var(--border);
-  border-bottom-color: var(--bg2);
-  margin-bottom: -1px;
+  background: var(--purple-bg);
+  border-color: rgba(124,109,245,0.4);
 }
 
 /* Content */
@@ -327,7 +329,7 @@ body {
   <div class="header-badge">筱君大隊</div>
   <h1>🏆 任務追蹤儀表板</h1>
   <div class="sub">第3週 6/8（一）～ 6/14（日）</div>
-  <div class="date">截至 6/8 更新</div>
+  <div class="date">截至 6/8 21:00 更新</div>
   <div class="week-tag">⚠️ 主題親證2 開跑！2週內完成 +2800</div>
 </div>
 
@@ -344,13 +346,13 @@ body {
     <div class="group-name">佛系但暴富組</div>
     <div class="group-stats">
       <span>7人</span>
-      <span>隊長：王慧涵</span>
+      <span>隊長：王薏涵</span>
     </div>
   </div>
   <div class="members-grid">
 
     <div class="member-card">
-      <div class="card-top"><div class="avatar av-purple">慧</div><div><div class="card-name">王慧涵</div><div class="card-role">孫悟空（隊長）</div></div></div>
+      <div class="card-top"><div class="avatar av-purple">慧</div><div><div class="card-name">王薏涵</div><div class="card-role">孫悟空（隊長）</div></div></div>
       <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">15,400</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+3,700</div></div></div>
       <div class="section-title">今日定課</div>
       <div class="task-row"><span class="task-num">1</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
@@ -364,6 +366,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card">
@@ -381,6 +385,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card">
@@ -398,6 +404,8 @@ body {
       <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card">
@@ -415,6 +423,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card">
@@ -432,6 +442,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card alert">
@@ -449,6 +461,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card">
@@ -466,6 +480,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
   </div>
@@ -485,7 +501,7 @@ body {
 ━━━━━━━━━━━━━━
 🎯 本週特殊任務：
 
-👤 王慧涵（孫悟空）
+👤 王薏涵（孫悟空）
 ✓ 親證分享
 ❌ 蓋雅、天使通話、欣賞夥伴、圓夢計畫(x2)、參加活動(x2)、主題親證2
 
@@ -512,6 +528,8 @@ body {
 ❌ 蓋雅、天使通話、欣賞夥伴、圓夢計畫(x2)、參加活動(x2)、主題親證2
 
 ⚠️ 主題親證2（6/8開跑，2週內完成，+2800！）
+⚠️ 小組聚會（本月內完成1次，+2000！）
+⚠️ 巔峰取經（活動結束前完成，+30000！）
 佛系也要暴富，新的一週衝🙏✨</div>
     <button class="copy-btn" onclick="copyMsg('msg9', this)">一鍵複製貼到 Line ↗</button>
   </div>
@@ -557,6 +575,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card">
@@ -574,6 +594,8 @@ body {
       <div class="task-row"><span class="task-name">親證分享</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card">
@@ -591,6 +613,8 @@ body {
       <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card alert">
@@ -608,6 +632,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card">
@@ -625,6 +651,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
   </div>
@@ -663,6 +691,8 @@ body {
 ❌ 蓋雅、天使通話、欣賞夥伴、親證分享、圓夢計畫(x2)、參加活動(x2)、主題親證2
 
 ⚠️ 主題親證2（6/8開跑，2週內完成，+2800！）
+⚠️ 小組聚會（本月內完成1次，+2000！）
+⚠️ 巔峰取經（活動結束前完成，+30000！）
 十破天驚繼續衝🔥</div>
     <button class="copy-btn" onclick="copyMsg('msg10', this)">一鍵複製貼到 Line ↗</button>
   </div>
@@ -691,10 +721,12 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card">
-      <div class="card-top"><div class="avatar av-purple">丞</div><div><div class="card-name">郭丞淕</div><div class="card-role">哪吒（衝衝）</div></div></div>
+      <div class="card-top"><div class="avatar av-purple">丞</div><div><div class="card-name">郭丞浤</div><div class="card-role">哪吒（衝衝）</div></div></div>
       <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">15,800</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+800</div></div></div>
       <div class="section-title">今日定課</div>
       <div class="task-row"><span class="task-num">1</span><span class="task-name done">天使通話</span><span class="badge done">✓</span></div>
@@ -708,6 +740,8 @@ body {
       <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card">
@@ -725,6 +759,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card alert">
@@ -742,6 +778,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card">
@@ -759,6 +797,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card">
@@ -776,6 +816,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
   </div>
@@ -795,7 +837,7 @@ body {
 👤 許玲慧（抱抱）
 ❌ 蓋雅、天使通話、欣賞夥伴、親證分享、圓夢計畫(x2)、參加活動(x2)、主題親證2
 
-👤 郭丞淕（衝衝）
+👤 郭丞浤（衝衝）
 ✓ 天使通話、欣賞夥伴、親證分享、圓夢計畫(x2)
 ❌ 蓋雅、參加活動(x2)、主題親證2
 
@@ -815,6 +857,8 @@ body {
 ❌ 蓋雅、天使通話、圓夢計畫(x2)、參加活動(x2)、主題親證2
 
 ⚠️ 主題親證2（6/8開跑，2週內完成，+2800！）
+⚠️ 小組聚會（本月內完成1次，+2000！）
+⚠️ 巔峰取經（活動結束前完成，+30000！）
 戰神突擊隊加油衝💪</div>
     <button class="copy-btn" onclick="copyMsg('msg11', this)">一鍵複製貼到 Line ↗</button>
   </div>
@@ -843,6 +887,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card">
@@ -860,6 +906,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card alert">
@@ -877,6 +925,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card">
@@ -894,6 +944,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card alert">
@@ -911,6 +963,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card">
@@ -928,6 +982,8 @@ body {
       <div class="task-row"><span class="task-name">圓夢計畫(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加活動(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">小組聚會(本月1次)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經(活動結束前)</span><span class="badge miss">未做</span></div>
     </div>
 
   </div>
@@ -968,12 +1024,14 @@ body {
 ❌ 蓋雅、天使通話、圓夢計畫(x2)、參加活動(x2)、主題親證2
 
 ⚠️ 主題親證2（6/8開跑，2週內完成，+2800！）
+⚠️ 小組聚會（本月內完成1次，+2000！）
+⚠️ 巔峰取經（活動結束前完成，+30000！）
 修心之路一起加油✨</div>
     <button class="copy-btn" onclick="copyMsg('msg12', this)">一鍵複製貼到 Line ↗</button>
   </div>
 </div>
 
-<div class="footer">筱君大隊任務追蹤 · 截至 6/8 更新</div>
+<div class="footer">筱君大隊任務追蹤 · 截至 6/8 21:00 更新</div>
 
 <script>
 function switchTab(n) {
