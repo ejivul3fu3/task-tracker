@@ -1,13 +1,370 @@
 <!DOCTYPE html>
-<html lang="zh-TW">
-<head>
+<html lang="zh-TW" style="background-color: transparent;"><head>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.13/html-to-image.min.js" integrity="sha512-iZ2ORl595Wx6miw+GuadDet4WQbdSWS3JLMoNfY8cRGoEFy6oT3G9IbcrBeL6AfkgpA51ETt/faX6yLV+/gFJg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script>
+      (function() {
+        // Capture host references before any artifact code runs: Window.parent
+        // is [Replaceable] (a top-level `var parent` in artifact code would
+        // replace the accessor with a data property), and a top-level
+        // `const crypto` would shadow the global — either would otherwise
+        // silently break the bridge for artifacts that worked before.
+        const realParent = window.parent;
+        const cryptoObj = window.crypto;
+        // crypto.randomUUID exists only in Secure Contexts; fall back to a
+        // unique non-crypto id elsewhere (http://LAN-IP dev flows) —
+        // uniqueness is what the bridge needs, unpredictability is
+        // defense-in-depth on top of the source guards.
+        const newRequestId =
+          cryptoObj && typeof cryptoObj.randomUUID === "function"
+            ? function () { return cryptoObj.randomUUID(); }
+            : function () { return Date.now() + "-" + Math.random(); };
+        const originalConsole = window.console;
+        window.console = {
+          log: (...args) => {
+            originalConsole.log(...args);
+            realParent.postMessage({ type: 'console', message: args.join(' ') }, '*');
+          },
+          error: (...args) => {
+            originalConsole.error(...args);
+            realParent.postMessage({ type: 'console', message: 'Error: ' + args.join(' ') }, '*');
+          },
+          warn: (...args) => {
+            originalConsole.warn(...args);
+            realParent.postMessage({ type: 'console', message: 'Warning: ' + args.join(' ') }, '*');
+          }
+        };
+
+        // Bridge request ids are crypto-random (not sequential) so they
+        // cannot be predicted by other frames in the tab.
+        let callbacksMap = new Map();
+        let streamControllers = new Map();
+        
+        window.claude = {
+          complete: (prompt) => {
+            return new Promise((resolve, reject) => {
+              const id = newRequestId();
+              callbacksMap.set(id, { resolve, reject });
+              realParent.postMessage({ type: 'claudeComplete', id, prompt }, '*');
+            });
+          }
+        };
+
+        window.storage = {
+          get: (key, shared = false) => {
+            return new Promise((resolve, reject) => {
+              const id = newRequestId();
+              callbacksMap.set(id, { resolve, reject });
+              realParent.postMessage({ type: 'storageGet', id, key, shared }, '*');
+            });
+          },
+          set: (key, value, shared = false) => {
+            return new Promise((resolve, reject) => {
+              const id = newRequestId();
+              callbacksMap.set(id, { resolve, reject });
+              realParent.postMessage({ type: 'storageSet', id, key, value, shared }, '*');
+            });
+          },
+          delete: (key, shared = false) => {
+            return new Promise((resolve, reject) => {
+              const id = newRequestId();
+              callbacksMap.set(id, { resolve, reject });
+              realParent.postMessage({ type: 'storageDelete', id, key, shared }, '*');
+            });
+          },
+          list: (prefix, shared = false) => {
+            return new Promise((resolve, reject) => {
+              const id = newRequestId();
+              callbacksMap.set(id, { resolve, reject });
+              realParent.postMessage({ type: 'storageList', id, prefix, shared }, '*');
+            });
+          }
+        };
+
+        let pendingBlobs = new Map();
+        URL.createObjectURL = (blob) => {
+          // Store the blob and create an ID and URL for it
+          const blobId = `blob-${Date.now()}-${Math.random()}`;
+          pendingBlobs.set(blobId, blob);
+          return `blob-request://${blobId}`;
+        };
+
+        URL.revokeObjectURL = (url) => {
+          // Remove the blob from our store
+          const blobId = url.replace("blob-request://", "");
+          pendingBlobs.delete(blobId);
+        };
+
+        const getBlobFromURL = (url) => {
+          const blobId = url.replace("blob-request://", "");
+          return pendingBlobs.get(blobId);
+        };
+
+        // Override global fetch with streaming support
+        window.fetch = (url, init = {}) => {
+          return new Promise((resolve, reject) => {
+            const id = newRequestId();
+            const channelId = `fetch-${id}-${Date.now()}`;
+            
+            callbacksMap.set(id, { 
+              resolve: (response) => {
+                // Null-body statuses: Response(stream, {status: 204}) throws
+                // per the Fetch spec, which would escape this resolver and
+                // hang the artifact's await forever.
+                if (response.status === 204 || response.status === 205 || response.status === 304) {
+                  try {
+                    resolve(new Response(null, {
+                      status: response.status,
+                      statusText: response.statusText,
+                      headers: response.headers
+                    }));
+                  } catch (err) {
+                    // Invalid statusText/header bytes can throw here too.
+                    reject(new TypeError(
+                      'Bridge fetch: unconstructable response (status ' + response.status + ')'
+                    ));
+                  }
+                  return;
+                }
+                // Create a ReadableStream for the response body
+                const stream = new ReadableStream({
+                  start(controller) {
+                    streamControllers.set(channelId, controller);
+                  },
+                  cancel() {
+                    streamControllers.delete(channelId);
+                  }
+                });
+                
+                // Create and return the Response with the stream. Response()
+                // requires status in [200, 599]; an opaque/no-cors fetch
+                // forwards status 0, which would throw here and escape the
+                // resolver, hanging the artifact's await. Surface it as a
+                // network-error-shaped rejection instead.
+                try {
+                  resolve(new Response(stream, {
+                    status: response.status,
+                    statusText: response.statusText,
+                    headers: response.headers
+                  }));
+                } catch (err) {
+                  streamControllers.delete(channelId);
+                  reject(new TypeError(
+                    'Bridge fetch: unconstructable response (status ' + response.status + ')'
+                  ));
+                }
+              },
+              reject,
+              channelId
+            });
+            
+            realParent.postMessage({
+              type: 'proxyFetch',
+              id,
+              url,
+              init,
+              channelId
+            }, '*');
+          });
+        };
+
+        window.addEventListener('message', async (event) => {
+          // Only the embedding parent may drive the bridge — sibling and
+          // nested frames can also postMessage into this window.
+          if (event.source !== realParent) return;
+          if (event.data.type === 'takeScreenshot') {
+            // Echo the request's nonce so the requester can correlate the
+            // reply to ITS request — a reply without the expected nonce
+            // (e.g. from a stale pre-remount artifact) is ignored upstream.
+            const screenshotNonce = event.data.nonce;
+            const rootElement = document.getElementById('artifacts-component-root-html');
+            if (!rootElement) {
+              realParent.postMessage({
+                type: 'screenshotError',
+                nonce: screenshotNonce,
+                error: new Error('Root element not found'),
+              }, '*');
+              return;
+            }
+            // Catch CDN load failures (htmlToImage undefined) and toPng errors
+            // so the parent always gets a response instead of hanging forever.
+            try {
+              const screenshot = await htmlToImage.toPng(rootElement, {
+                imagePlaceholder:
+                  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAA1JREFUGFdjePDgwX8ACOQDoNsk0PMAAAAASUVORK5CYII=",
+              });
+              realParent.postMessage({
+                type: 'screenshotData',
+                nonce: screenshotNonce,
+                data: screenshot,
+              }, '*');
+            } catch (err) {
+              realParent.postMessage({
+                type: 'screenshotError',
+                nonce: screenshotNonce,
+                error: err instanceof Error ? err : new Error(String(err)),
+              }, '*');
+            }
+          } else if (event.data.type === 'claudeComplete') {
+            const callback = callbacksMap.get(event.data.id);
+            if (!callback) return;
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.completion);
+            }
+            callbacksMap.delete(event.data.id);
+          } else if (event.data.type === 'proxyFetchResponse') {
+            const callback = callbacksMap.get(event.data.id);
+            if (!callback) return;
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+              callbacksMap.delete(event.data.id);
+            } else {
+              // Initial response with headers, status, etc.
+              callback.resolve({
+                status: event.data.status,
+                statusText: event.data.statusText,
+                headers: event.data.headers
+              });
+              // Don't delete the callback yet if streaming
+              if (!event.data.body) {
+                callbacksMap.delete(event.data.id);
+              }
+            }
+          } else if (event.data.type === 'proxyFetchStream') {
+            // Handle streaming data chunks
+            const controller = streamControllers.get(event.data.channelId);
+            if (controller) {
+              if (event.data.error) {
+                controller.error(new Error(event.data.error));
+                streamControllers.delete(event.data.channelId);
+              } else if (event.data.done) {
+                controller.close();
+                streamControllers.delete(event.data.channelId);
+                // Clean up the callback
+                const callback = Array.from(callbacksMap.entries()).find(
+                  ([_, value]) => value.channelId === event.data.channelId
+                );
+                if (callback) {
+                  callbacksMap.delete(callback[0]);
+                }
+              } else if (event.data.chunk) {
+                controller.enqueue(new Uint8Array(event.data.chunk));
+              }
+            }
+          } else if (event.data.type === 'storageGet') {
+            const callback = callbacksMap.get(event.data.id);
+            if (!callback) return;
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.result);
+            }
+            callbacksMap.delete(event.data.id);
+          } else if (event.data.type === 'storageSet') {
+            const callback = callbacksMap.get(event.data.id);
+            if (!callback) return;
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.result);
+            }
+            callbacksMap.delete(event.data.id);
+          } else if (event.data.type === 'storageDelete') {
+            const callback = callbacksMap.get(event.data.id);
+            if (!callback) return;
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.result);
+            }
+            callbacksMap.delete(event.data.id);
+          } else if (event.data.type === 'storageList') {
+            const callback = callbacksMap.get(event.data.id);
+            if (!callback) return;
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.result);
+            }
+            callbacksMap.delete(event.data.id);
+          }
+        });
+
+        window.addEventListener('click', (event) => {
+          const isEl = event.target instanceof HTMLElement;
+          if (!isEl) return;
+    
+          // find ancestor links
+          const linkEl = event.target.closest("a");
+          if (!linkEl || !linkEl.href) return;
+    
+          event.preventDefault();
+          event.stopImmediatePropagation();
+    
+          if (linkEl.href.startsWith("blob-request:")) {
+            const blob = getBlobFromURL(linkEl.href);
+            if (!blob) return;
+            void blob.arrayBuffer().then((data) => {
+              realParent.postMessage({
+                type: "downloadFile",
+                filename: linkEl.download,
+                data,
+                mimeType: blob.type || "application/octet-stream",
+              });
+            });
+          } else if (linkEl.href.startsWith("data:")) {
+            const [header, base64Data] = linkEl.href.split(",");
+            const mimeMatch = header.match(/data:([^;]+)/);
+            const mimeType = mimeMatch ? mimeMatch[1] : "application/octet-stream";
+            const binaryString = atob(base64Data);
+            const data = Uint8Array.from(binaryString, (c) =>
+              c.charCodeAt(0),
+            ).buffer;
+            realParent.postMessage({
+              type: "downloadFile",
+              filename: linkEl.download,
+              data,
+              mimeType,
+            });
+          } else {
+            let linkUrl;
+            try {
+              linkUrl = new URL(linkEl.href);
+            } catch (error) {
+              return;
+            }
+    
+            if (linkUrl.hostname === window.location.hostname) return;
+      
+            realParent.postMessage({
+              type: 'openExternal',
+              href: linkEl.href,
+            }, '*');
+          }
+      });
+
+        const originalOpen = window.open;
+        window.open = function (url) {
+          realParent.postMessage({
+            type: "openExternal",
+            href: url,
+          }, "*");
+        };
+
+        window.addEventListener('error', (event) => {
+          realParent.postMessage({ type: 'console', message: 'Uncaught Error: ' + event.message }, '*');
+        });
+      })();
+    </script>
+  
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>筱君大隊 任務追蹤</title>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&amp;display=swap" rel="stylesheet">
 <style>
 :root {
   --bg: #0f0f13;
@@ -101,6 +458,30 @@ body {
   border-radius: 20px;
   margin-top: 10px;
 }
+
+/* Source copy button */
+.source-copy-btn {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 8px 16px;
+  background: var(--purple);
+  color: #fff;
+  border: none;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: 'Noto Sans TC', sans-serif;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+  letter-spacing: 0.02em;
+}
+.source-copy-btn:hover { background: #6b5ee0; }
+.source-copy-btn:active { transform: scale(0.98); }
+.source-copy-btn.copied { background: var(--green); }
 
 /* Tabs */
 .tabs {
@@ -565,7 +946,7 @@ body {
 
 </style>
 </head>
-<body>
+<body id="artifacts-component-root-html" style="background-color: transparent;">
 
 <div class="header">
   <div class="header-badge">筱君大隊</div>
@@ -573,6 +954,7 @@ body {
   <div class="sub">第4週 6/15（一）～ 6/21（日）</div>
   <div class="date">截至 6/15 09:32 更新（已含全隊24人）</div>
   <div class="week-tag">🆕 新的一週開始！本週特殊任務與定課歸零重新計算</div>
+  <button class="source-copy-btn" id="sourceCopyBtn" onclick="copySource(this)">📋 複製整份原始碼（貼到 GitHub）</button>
 </div>
 
 <div class="tabs">
@@ -599,12 +981,12 @@ body {
     <div class="hug-header">
       <div style="display:flex;justify-content:center;margin-bottom:8px">
 <svg class="pikmin-svg" viewBox="0 0 320 80" xmlns="http://www.w3.org/2000/svg">
-  <g class="pk pk1"><line x1="20" y1="8" x2="20" y2="22" stroke="#4a90d9" stroke-width="1.5"/><ellipse cx="20" cy="6" rx="3" ry="4" fill="white" stroke="#aaa" stroke-width="0.5"/><ellipse cx="20" cy="30" rx="9" ry="11" fill="#4a90d9"/><ellipse cx="20" cy="26" rx="7" ry="7" fill="#5aa0e8"/><circle cx="17" cy="25" r="2" fill="white"/><circle cx="23" cy="25" r="2" fill="white"/><circle cx="17.5" cy="25.5" r="1" fill="#222"/><circle cx="23.5" cy="25.5" r="1" fill="#222"/><ellipse cx="20" cy="29" rx="4" ry="2" fill="#3a7abf"/><line x1="11" y1="28" x2="6" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="29" y1="28" x2="34" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="16" y1="40" x2="14" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="24" y1="40" x2="26" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk2"><line x1="70" y1="8" x2="70" y2="22" stroke="#e8c832" stroke-width="1.5"/><ellipse cx="70" cy="6" rx="3" ry="4" fill="#f5e070" stroke="#cca820" stroke-width="0.5"/><ellipse cx="70" cy="30" rx="9" ry="11" fill="#e8c832"/><ellipse cx="70" cy="26" rx="7" ry="7" fill="#f0d840"/><circle cx="67" cy="25" r="2" fill="white"/><circle cx="73" cy="25" r="2" fill="white"/><circle cx="67.5" cy="25.5" r="1" fill="#222"/><circle cx="73.5" cy="25.5" r="1" fill="#222"/><ellipse cx="70" cy="29" rx="4" ry="2" fill="#c8a820"/><ellipse cx="61" cy="27" rx="4" ry="6" fill="#e8c832"/><ellipse cx="79" cy="27" rx="4" ry="6" fill="#e8c832"/><line x1="66" y1="40" x2="64" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"/><line x1="74" y1="40" x2="76" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk3"><line x1="120" y1="8" x2="120" y2="22" stroke="#e84040" stroke-width="1.5"/><ellipse cx="120" cy="6" rx="3" ry="4" fill="#ff6060" stroke="#c02020" stroke-width="0.5"/><ellipse cx="120" cy="30" rx="9" ry="11" fill="#e84040"/><ellipse cx="120" cy="26" rx="7" ry="7" fill="#f05050"/><circle cx="117" cy="25" r="2" fill="white"/><circle cx="123" cy="25" r="2" fill="white"/><circle cx="117.5" cy="25.5" r="1" fill="#222"/><circle cx="123.5" cy="25.5" r="1" fill="#222"/><ellipse cx="120" cy="29" rx="5" ry="2.5" fill="#c02020"/><line x1="111" y1="28" x2="106" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="129" y1="28" x2="134" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="116" y1="40" x2="114" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="124" y1="40" x2="126" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk4"><line x1="170" y1="6" x2="170" y2="20" stroke="#7b4faa" stroke-width="1.5"/><ellipse cx="170" cy="4" rx="4" ry="5" fill="#c090e0" stroke="#7b4faa" stroke-width="0.5"/><ellipse cx="170" cy="31" rx="11" ry="12" fill="#7b4faa"/><ellipse cx="170" cy="27" rx="9" ry="9" fill="#9060c0"/><circle cx="166" cy="26" r="2.5" fill="white"/><circle cx="174" cy="26" r="2.5" fill="white"/><circle cx="166.5" cy="26.5" r="1.2" fill="#222"/><circle cx="174.5" cy="26.5" r="1.2" fill="#222"/><ellipse cx="170" cy="31" rx="5" ry="2.5" fill="#5a3080"/><line x1="159" y1="29" x2="153" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="181" y1="29" x2="187" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="165" y1="42" x2="163" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="175" y1="42" x2="177" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/></g>
-  <g class="pk pk5"><line x1="220" y1="8" x2="220" y2="22" stroke="#ddd" stroke-width="1.5"/><ellipse cx="220" cy="6" rx="3" ry="4" fill="#ff88aa" stroke="#ddd" stroke-width="0.5"/><ellipse cx="220" cy="30" rx="8" ry="10" fill="white" stroke="#ddd" stroke-width="1"/><ellipse cx="220" cy="26" rx="6" ry="6" fill="#f8f8f8"/><circle cx="217" cy="25" r="2.5" fill="#ff4466"/><circle cx="223" cy="25" r="2.5" fill="#ff4466"/><circle cx="217.5" cy="25.5" r="1" fill="#222"/><circle cx="223.5" cy="25.5" r="1" fill="#222"/><line x1="212" y1="28" x2="207" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="228" y1="28" x2="233" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="216" y1="40" x2="214" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="224" y1="40" x2="226" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk6"><line x1="270" y1="6" x2="270" y2="16" stroke="#666" stroke-width="1.5"/><ellipse cx="270" cy="4" rx="3" ry="4" fill="#aaa" stroke="#666" stroke-width="0.5"/><ellipse cx="270" cy="28" rx="11" ry="10" fill="#555"/><ellipse cx="267" cy="24" rx="3" ry="2.5" fill="#777"/><ellipse cx="274" cy="23" rx="2.5" ry="2" fill="#777"/><circle cx="266" cy="24" r="2" fill="white"/><circle cx="274" cy="23" r="2" fill="white"/><circle cx="266.5" cy="24.5" r="1" fill="#222"/><circle cx="274.5" cy="23.5" r="1" fill="#222"/><line x1="260" y1="30" x2="255" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="280" y1="30" x2="285" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="265" y1="38" x2="263" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="275" y1="38" x2="277" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"/></g>
+  <g class="pk pk1"><line x1="20" y1="8" x2="20" y2="22" stroke="#4a90d9" stroke-width="1.5"></line><ellipse cx="20" cy="6" rx="3" ry="4" fill="white" stroke="#aaa" stroke-width="0.5"></ellipse><ellipse cx="20" cy="30" rx="9" ry="11" fill="#4a90d9"></ellipse><ellipse cx="20" cy="26" rx="7" ry="7" fill="#5aa0e8"></ellipse><circle cx="17" cy="25" r="2" fill="white"></circle><circle cx="23" cy="25" r="2" fill="white"></circle><circle cx="17.5" cy="25.5" r="1" fill="#222"></circle><circle cx="23.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="20" cy="29" rx="4" ry="2" fill="#3a7abf"></ellipse><line x1="11" y1="28" x2="6" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="29" y1="28" x2="34" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="16" y1="40" x2="14" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="24" y1="40" x2="26" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk2"><line x1="70" y1="8" x2="70" y2="22" stroke="#e8c832" stroke-width="1.5"></line><ellipse cx="70" cy="6" rx="3" ry="4" fill="#f5e070" stroke="#cca820" stroke-width="0.5"></ellipse><ellipse cx="70" cy="30" rx="9" ry="11" fill="#e8c832"></ellipse><ellipse cx="70" cy="26" rx="7" ry="7" fill="#f0d840"></ellipse><circle cx="67" cy="25" r="2" fill="white"></circle><circle cx="73" cy="25" r="2" fill="white"></circle><circle cx="67.5" cy="25.5" r="1" fill="#222"></circle><circle cx="73.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="70" cy="29" rx="4" ry="2" fill="#c8a820"></ellipse><ellipse cx="61" cy="27" rx="4" ry="6" fill="#e8c832"></ellipse><ellipse cx="79" cy="27" rx="4" ry="6" fill="#e8c832"></ellipse><line x1="66" y1="40" x2="64" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"></line><line x1="74" y1="40" x2="76" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk3"><line x1="120" y1="8" x2="120" y2="22" stroke="#e84040" stroke-width="1.5"></line><ellipse cx="120" cy="6" rx="3" ry="4" fill="#ff6060" stroke="#c02020" stroke-width="0.5"></ellipse><ellipse cx="120" cy="30" rx="9" ry="11" fill="#e84040"></ellipse><ellipse cx="120" cy="26" rx="7" ry="7" fill="#f05050"></ellipse><circle cx="117" cy="25" r="2" fill="white"></circle><circle cx="123" cy="25" r="2" fill="white"></circle><circle cx="117.5" cy="25.5" r="1" fill="#222"></circle><circle cx="123.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="120" cy="29" rx="5" ry="2.5" fill="#c02020"></ellipse><line x1="111" y1="28" x2="106" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="129" y1="28" x2="134" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="116" y1="40" x2="114" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="124" y1="40" x2="126" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk4"><line x1="170" y1="6" x2="170" y2="20" stroke="#7b4faa" stroke-width="1.5"></line><ellipse cx="170" cy="4" rx="4" ry="5" fill="#c090e0" stroke="#7b4faa" stroke-width="0.5"></ellipse><ellipse cx="170" cy="31" rx="11" ry="12" fill="#7b4faa"></ellipse><ellipse cx="170" cy="27" rx="9" ry="9" fill="#9060c0"></ellipse><circle cx="166" cy="26" r="2.5" fill="white"></circle><circle cx="174" cy="26" r="2.5" fill="white"></circle><circle cx="166.5" cy="26.5" r="1.2" fill="#222"></circle><circle cx="174.5" cy="26.5" r="1.2" fill="#222"></circle><ellipse cx="170" cy="31" rx="5" ry="2.5" fill="#5a3080"></ellipse><line x1="159" y1="29" x2="153" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="181" y1="29" x2="187" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="165" y1="42" x2="163" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="175" y1="42" x2="177" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line></g>
+  <g class="pk pk5"><line x1="220" y1="8" x2="220" y2="22" stroke="#ddd" stroke-width="1.5"></line><ellipse cx="220" cy="6" rx="3" ry="4" fill="#ff88aa" stroke="#ddd" stroke-width="0.5"></ellipse><ellipse cx="220" cy="30" rx="8" ry="10" fill="white" stroke="#ddd" stroke-width="1"></ellipse><ellipse cx="220" cy="26" rx="6" ry="6" fill="#f8f8f8"></ellipse><circle cx="217" cy="25" r="2.5" fill="#ff4466"></circle><circle cx="223" cy="25" r="2.5" fill="#ff4466"></circle><circle cx="217.5" cy="25.5" r="1" fill="#222"></circle><circle cx="223.5" cy="25.5" r="1" fill="#222"></circle><line x1="212" y1="28" x2="207" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="228" y1="28" x2="233" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="216" y1="40" x2="214" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="224" y1="40" x2="226" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk6"><line x1="270" y1="6" x2="270" y2="16" stroke="#666" stroke-width="1.5"></line><ellipse cx="270" cy="4" rx="3" ry="4" fill="#aaa" stroke="#666" stroke-width="0.5"></ellipse><ellipse cx="270" cy="28" rx="11" ry="10" fill="#555"></ellipse><ellipse cx="267" cy="24" rx="3" ry="2.5" fill="#777"></ellipse><ellipse cx="274" cy="23" rx="2.5" ry="2" fill="#777"></ellipse><circle cx="266" cy="24" r="2" fill="white"></circle><circle cx="274" cy="23" r="2" fill="white"></circle><circle cx="266.5" cy="24.5" r="1" fill="#222"></circle><circle cx="274.5" cy="23.5" r="1" fill="#222"></circle><line x1="260" y1="30" x2="255" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="280" y1="30" x2="285" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="265" y1="38" x2="263" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="275" y1="38" x2="277" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"></line></g>
 </svg>
 </div>
       <div class="hug-title">💝 需要愛的抱抱</div>
@@ -941,12 +1323,12 @@ body {
     <div class="hug-header">
       <div style="display:flex;justify-content:center;margin-bottom:8px">
 <svg class="pikmin-svg" viewBox="0 0 320 80" xmlns="http://www.w3.org/2000/svg">
-  <g class="pk pk1"><line x1="20" y1="8" x2="20" y2="22" stroke="#4a90d9" stroke-width="1.5"/><ellipse cx="20" cy="6" rx="3" ry="4" fill="white" stroke="#aaa" stroke-width="0.5"/><ellipse cx="20" cy="30" rx="9" ry="11" fill="#4a90d9"/><ellipse cx="20" cy="26" rx="7" ry="7" fill="#5aa0e8"/><circle cx="17" cy="25" r="2" fill="white"/><circle cx="23" cy="25" r="2" fill="white"/><circle cx="17.5" cy="25.5" r="1" fill="#222"/><circle cx="23.5" cy="25.5" r="1" fill="#222"/><ellipse cx="20" cy="29" rx="4" ry="2" fill="#3a7abf"/><line x1="11" y1="28" x2="6" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="29" y1="28" x2="34" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="16" y1="40" x2="14" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="24" y1="40" x2="26" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk2"><line x1="70" y1="8" x2="70" y2="22" stroke="#e8c832" stroke-width="1.5"/><ellipse cx="70" cy="6" rx="3" ry="4" fill="#f5e070" stroke="#cca820" stroke-width="0.5"/><ellipse cx="70" cy="30" rx="9" ry="11" fill="#e8c832"/><ellipse cx="70" cy="26" rx="7" ry="7" fill="#f0d840"/><circle cx="67" cy="25" r="2" fill="white"/><circle cx="73" cy="25" r="2" fill="white"/><circle cx="67.5" cy="25.5" r="1" fill="#222"/><circle cx="73.5" cy="25.5" r="1" fill="#222"/><ellipse cx="70" cy="29" rx="4" ry="2" fill="#c8a820"/><ellipse cx="61" cy="27" rx="4" ry="6" fill="#e8c832"/><ellipse cx="79" cy="27" rx="4" ry="6" fill="#e8c832"/><line x1="66" y1="40" x2="64" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"/><line x1="74" y1="40" x2="76" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk3"><line x1="120" y1="8" x2="120" y2="22" stroke="#e84040" stroke-width="1.5"/><ellipse cx="120" cy="6" rx="3" ry="4" fill="#ff6060" stroke="#c02020" stroke-width="0.5"/><ellipse cx="120" cy="30" rx="9" ry="11" fill="#e84040"/><ellipse cx="120" cy="26" rx="7" ry="7" fill="#f05050"/><circle cx="117" cy="25" r="2" fill="white"/><circle cx="123" cy="25" r="2" fill="white"/><circle cx="117.5" cy="25.5" r="1" fill="#222"/><circle cx="123.5" cy="25.5" r="1" fill="#222"/><ellipse cx="120" cy="29" rx="5" ry="2.5" fill="#c02020"/><line x1="111" y1="28" x2="106" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="129" y1="28" x2="134" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="116" y1="40" x2="114" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="124" y1="40" x2="126" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk4"><line x1="170" y1="6" x2="170" y2="20" stroke="#7b4faa" stroke-width="1.5"/><ellipse cx="170" cy="4" rx="4" ry="5" fill="#c090e0" stroke="#7b4faa" stroke-width="0.5"/><ellipse cx="170" cy="31" rx="11" ry="12" fill="#7b4faa"/><ellipse cx="170" cy="27" rx="9" ry="9" fill="#9060c0"/><circle cx="166" cy="26" r="2.5" fill="white"/><circle cx="174" cy="26" r="2.5" fill="white"/><circle cx="166.5" cy="26.5" r="1.2" fill="#222"/><circle cx="174.5" cy="26.5" r="1.2" fill="#222"/><ellipse cx="170" cy="31" rx="5" ry="2.5" fill="#5a3080"/><line x1="159" y1="29" x2="153" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="181" y1="29" x2="187" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="165" y1="42" x2="163" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="175" y1="42" x2="177" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/></g>
-  <g class="pk pk5"><line x1="220" y1="8" x2="220" y2="22" stroke="#ddd" stroke-width="1.5"/><ellipse cx="220" cy="6" rx="3" ry="4" fill="#ff88aa" stroke="#ddd" stroke-width="0.5"/><ellipse cx="220" cy="30" rx="8" ry="10" fill="white" stroke="#ddd" stroke-width="1"/><ellipse cx="220" cy="26" rx="6" ry="6" fill="#f8f8f8"/><circle cx="217" cy="25" r="2.5" fill="#ff4466"/><circle cx="223" cy="25" r="2.5" fill="#ff4466"/><circle cx="217.5" cy="25.5" r="1" fill="#222"/><circle cx="223.5" cy="25.5" r="1" fill="#222"/><line x1="212" y1="28" x2="207" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="228" y1="28" x2="233" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="216" y1="40" x2="214" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="224" y1="40" x2="226" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk6"><line x1="270" y1="6" x2="270" y2="16" stroke="#666" stroke-width="1.5"/><ellipse cx="270" cy="4" rx="3" ry="4" fill="#aaa" stroke="#666" stroke-width="0.5"/><ellipse cx="270" cy="28" rx="11" ry="10" fill="#555"/><ellipse cx="267" cy="24" rx="3" ry="2.5" fill="#777"/><ellipse cx="274" cy="23" rx="2.5" ry="2" fill="#777"/><circle cx="266" cy="24" r="2" fill="white"/><circle cx="274" cy="23" r="2" fill="white"/><circle cx="266.5" cy="24.5" r="1" fill="#222"/><circle cx="274.5" cy="23.5" r="1" fill="#222"/><line x1="260" y1="30" x2="255" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="280" y1="30" x2="285" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="265" y1="38" x2="263" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="275" y1="38" x2="277" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"/></g>
+  <g class="pk pk1"><line x1="20" y1="8" x2="20" y2="22" stroke="#4a90d9" stroke-width="1.5"></line><ellipse cx="20" cy="6" rx="3" ry="4" fill="white" stroke="#aaa" stroke-width="0.5"></ellipse><ellipse cx="20" cy="30" rx="9" ry="11" fill="#4a90d9"></ellipse><ellipse cx="20" cy="26" rx="7" ry="7" fill="#5aa0e8"></ellipse><circle cx="17" cy="25" r="2" fill="white"></circle><circle cx="23" cy="25" r="2" fill="white"></circle><circle cx="17.5" cy="25.5" r="1" fill="#222"></circle><circle cx="23.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="20" cy="29" rx="4" ry="2" fill="#3a7abf"></ellipse><line x1="11" y1="28" x2="6" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="29" y1="28" x2="34" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="16" y1="40" x2="14" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="24" y1="40" x2="26" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk2"><line x1="70" y1="8" x2="70" y2="22" stroke="#e8c832" stroke-width="1.5"></line><ellipse cx="70" cy="6" rx="3" ry="4" fill="#f5e070" stroke="#cca820" stroke-width="0.5"></ellipse><ellipse cx="70" cy="30" rx="9" ry="11" fill="#e8c832"></ellipse><ellipse cx="70" cy="26" rx="7" ry="7" fill="#f0d840"></ellipse><circle cx="67" cy="25" r="2" fill="white"></circle><circle cx="73" cy="25" r="2" fill="white"></circle><circle cx="67.5" cy="25.5" r="1" fill="#222"></circle><circle cx="73.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="70" cy="29" rx="4" ry="2" fill="#c8a820"></ellipse><ellipse cx="61" cy="27" rx="4" ry="6" fill="#e8c832"></ellipse><ellipse cx="79" cy="27" rx="4" ry="6" fill="#e8c832"></ellipse><line x1="66" y1="40" x2="64" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"></line><line x1="74" y1="40" x2="76" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk3"><line x1="120" y1="8" x2="120" y2="22" stroke="#e84040" stroke-width="1.5"></line><ellipse cx="120" cy="6" rx="3" ry="4" fill="#ff6060" stroke="#c02020" stroke-width="0.5"></ellipse><ellipse cx="120" cy="30" rx="9" ry="11" fill="#e84040"></ellipse><ellipse cx="120" cy="26" rx="7" ry="7" fill="#f05050"></ellipse><circle cx="117" cy="25" r="2" fill="white"></circle><circle cx="123" cy="25" r="2" fill="white"></circle><circle cx="117.5" cy="25.5" r="1" fill="#222"></circle><circle cx="123.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="120" cy="29" rx="5" ry="2.5" fill="#c02020"></ellipse><line x1="111" y1="28" x2="106" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="129" y1="28" x2="134" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="116" y1="40" x2="114" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="124" y1="40" x2="126" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk4"><line x1="170" y1="6" x2="170" y2="20" stroke="#7b4faa" stroke-width="1.5"></line><ellipse cx="170" cy="4" rx="4" ry="5" fill="#c090e0" stroke="#7b4faa" stroke-width="0.5"></ellipse><ellipse cx="170" cy="31" rx="11" ry="12" fill="#7b4faa"></ellipse><ellipse cx="170" cy="27" rx="9" ry="9" fill="#9060c0"></ellipse><circle cx="166" cy="26" r="2.5" fill="white"></circle><circle cx="174" cy="26" r="2.5" fill="white"></circle><circle cx="166.5" cy="26.5" r="1.2" fill="#222"></circle><circle cx="174.5" cy="26.5" r="1.2" fill="#222"></circle><ellipse cx="170" cy="31" rx="5" ry="2.5" fill="#5a3080"></ellipse><line x1="159" y1="29" x2="153" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="181" y1="29" x2="187" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="165" y1="42" x2="163" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="175" y1="42" x2="177" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line></g>
+  <g class="pk pk5"><line x1="220" y1="8" x2="220" y2="22" stroke="#ddd" stroke-width="1.5"></line><ellipse cx="220" cy="6" rx="3" ry="4" fill="#ff88aa" stroke="#ddd" stroke-width="0.5"></ellipse><ellipse cx="220" cy="30" rx="8" ry="10" fill="white" stroke="#ddd" stroke-width="1"></ellipse><ellipse cx="220" cy="26" rx="6" ry="6" fill="#f8f8f8"></ellipse><circle cx="217" cy="25" r="2.5" fill="#ff4466"></circle><circle cx="223" cy="25" r="2.5" fill="#ff4466"></circle><circle cx="217.5" cy="25.5" r="1" fill="#222"></circle><circle cx="223.5" cy="25.5" r="1" fill="#222"></circle><line x1="212" y1="28" x2="207" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="228" y1="28" x2="233" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="216" y1="40" x2="214" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="224" y1="40" x2="226" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk6"><line x1="270" y1="6" x2="270" y2="16" stroke="#666" stroke-width="1.5"></line><ellipse cx="270" cy="4" rx="3" ry="4" fill="#aaa" stroke="#666" stroke-width="0.5"></ellipse><ellipse cx="270" cy="28" rx="11" ry="10" fill="#555"></ellipse><ellipse cx="267" cy="24" rx="3" ry="2.5" fill="#777"></ellipse><ellipse cx="274" cy="23" rx="2.5" ry="2" fill="#777"></ellipse><circle cx="266" cy="24" r="2" fill="white"></circle><circle cx="274" cy="23" r="2" fill="white"></circle><circle cx="266.5" cy="24.5" r="1" fill="#222"></circle><circle cx="274.5" cy="23.5" r="1" fill="#222"></circle><line x1="260" y1="30" x2="255" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="280" y1="30" x2="285" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="265" y1="38" x2="263" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="275" y1="38" x2="277" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"></line></g>
 </svg>
 </div>
       <div class="hug-title">💝 需要愛的抱抱</div>
@@ -1246,12 +1628,12 @@ body {
     <div class="hug-header">
       <div style="display:flex;justify-content:center;margin-bottom:8px">
 <svg class="pikmin-svg" viewBox="0 0 320 80" xmlns="http://www.w3.org/2000/svg">
-  <g class="pk pk1"><line x1="20" y1="8" x2="20" y2="22" stroke="#4a90d9" stroke-width="1.5"/><ellipse cx="20" cy="6" rx="3" ry="4" fill="white" stroke="#aaa" stroke-width="0.5"/><ellipse cx="20" cy="30" rx="9" ry="11" fill="#4a90d9"/><ellipse cx="20" cy="26" rx="7" ry="7" fill="#5aa0e8"/><circle cx="17" cy="25" r="2" fill="white"/><circle cx="23" cy="25" r="2" fill="white"/><circle cx="17.5" cy="25.5" r="1" fill="#222"/><circle cx="23.5" cy="25.5" r="1" fill="#222"/><ellipse cx="20" cy="29" rx="4" ry="2" fill="#3a7abf"/><line x1="11" y1="28" x2="6" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="29" y1="28" x2="34" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="16" y1="40" x2="14" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="24" y1="40" x2="26" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk2"><line x1="70" y1="8" x2="70" y2="22" stroke="#e8c832" stroke-width="1.5"/><ellipse cx="70" cy="6" rx="3" ry="4" fill="#f5e070" stroke="#cca820" stroke-width="0.5"/><ellipse cx="70" cy="30" rx="9" ry="11" fill="#e8c832"/><ellipse cx="70" cy="26" rx="7" ry="7" fill="#f0d840"/><circle cx="67" cy="25" r="2" fill="white"/><circle cx="73" cy="25" r="2" fill="white"/><circle cx="67.5" cy="25.5" r="1" fill="#222"/><circle cx="73.5" cy="25.5" r="1" fill="#222"/><ellipse cx="70" cy="29" rx="4" ry="2" fill="#c8a820"/><ellipse cx="61" cy="27" rx="4" ry="6" fill="#e8c832"/><ellipse cx="79" cy="27" rx="4" ry="6" fill="#e8c832"/><line x1="66" y1="40" x2="64" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"/><line x1="74" y1="40" x2="76" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk3"><line x1="120" y1="8" x2="120" y2="22" stroke="#e84040" stroke-width="1.5"/><ellipse cx="120" cy="6" rx="3" ry="4" fill="#ff6060" stroke="#c02020" stroke-width="0.5"/><ellipse cx="120" cy="30" rx="9" ry="11" fill="#e84040"/><ellipse cx="120" cy="26" rx="7" ry="7" fill="#f05050"/><circle cx="117" cy="25" r="2" fill="white"/><circle cx="123" cy="25" r="2" fill="white"/><circle cx="117.5" cy="25.5" r="1" fill="#222"/><circle cx="123.5" cy="25.5" r="1" fill="#222"/><ellipse cx="120" cy="29" rx="5" ry="2.5" fill="#c02020"/><line x1="111" y1="28" x2="106" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="129" y1="28" x2="134" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="116" y1="40" x2="114" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="124" y1="40" x2="126" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk4"><line x1="170" y1="6" x2="170" y2="20" stroke="#7b4faa" stroke-width="1.5"/><ellipse cx="170" cy="4" rx="4" ry="5" fill="#c090e0" stroke="#7b4faa" stroke-width="0.5"/><ellipse cx="170" cy="31" rx="11" ry="12" fill="#7b4faa"/><ellipse cx="170" cy="27" rx="9" ry="9" fill="#9060c0"/><circle cx="166" cy="26" r="2.5" fill="white"/><circle cx="174" cy="26" r="2.5" fill="white"/><circle cx="166.5" cy="26.5" r="1.2" fill="#222"/><circle cx="174.5" cy="26.5" r="1.2" fill="#222"/><ellipse cx="170" cy="31" rx="5" ry="2.5" fill="#5a3080"/><line x1="159" y1="29" x2="153" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="181" y1="29" x2="187" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="165" y1="42" x2="163" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="175" y1="42" x2="177" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/></g>
-  <g class="pk pk5"><line x1="220" y1="8" x2="220" y2="22" stroke="#ddd" stroke-width="1.5"/><ellipse cx="220" cy="6" rx="3" ry="4" fill="#ff88aa" stroke="#ddd" stroke-width="0.5"/><ellipse cx="220" cy="30" rx="8" ry="10" fill="white" stroke="#ddd" stroke-width="1"/><ellipse cx="220" cy="26" rx="6" ry="6" fill="#f8f8f8"/><circle cx="217" cy="25" r="2.5" fill="#ff4466"/><circle cx="223" cy="25" r="2.5" fill="#ff4466"/><circle cx="217.5" cy="25.5" r="1" fill="#222"/><circle cx="223.5" cy="25.5" r="1" fill="#222"/><line x1="212" y1="28" x2="207" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="228" y1="28" x2="233" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="216" y1="40" x2="214" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="224" y1="40" x2="226" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk6"><line x1="270" y1="6" x2="270" y2="16" stroke="#666" stroke-width="1.5"/><ellipse cx="270" cy="4" rx="3" ry="4" fill="#aaa" stroke="#666" stroke-width="0.5"/><ellipse cx="270" cy="28" rx="11" ry="10" fill="#555"/><ellipse cx="267" cy="24" rx="3" ry="2.5" fill="#777"/><ellipse cx="274" cy="23" rx="2.5" ry="2" fill="#777"/><circle cx="266" cy="24" r="2" fill="white"/><circle cx="274" cy="23" r="2" fill="white"/><circle cx="266.5" cy="24.5" r="1" fill="#222"/><circle cx="274.5" cy="23.5" r="1" fill="#222"/><line x1="260" y1="30" x2="255" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="280" y1="30" x2="285" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="265" y1="38" x2="263" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="275" y1="38" x2="277" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"/></g>
+  <g class="pk pk1"><line x1="20" y1="8" x2="20" y2="22" stroke="#4a90d9" stroke-width="1.5"></line><ellipse cx="20" cy="6" rx="3" ry="4" fill="white" stroke="#aaa" stroke-width="0.5"></ellipse><ellipse cx="20" cy="30" rx="9" ry="11" fill="#4a90d9"></ellipse><ellipse cx="20" cy="26" rx="7" ry="7" fill="#5aa0e8"></ellipse><circle cx="17" cy="25" r="2" fill="white"></circle><circle cx="23" cy="25" r="2" fill="white"></circle><circle cx="17.5" cy="25.5" r="1" fill="#222"></circle><circle cx="23.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="20" cy="29" rx="4" ry="2" fill="#3a7abf"></ellipse><line x1="11" y1="28" x2="6" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="29" y1="28" x2="34" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="16" y1="40" x2="14" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="24" y1="40" x2="26" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk2"><line x1="70" y1="8" x2="70" y2="22" stroke="#e8c832" stroke-width="1.5"></line><ellipse cx="70" cy="6" rx="3" ry="4" fill="#f5e070" stroke="#cca820" stroke-width="0.5"></ellipse><ellipse cx="70" cy="30" rx="9" ry="11" fill="#e8c832"></ellipse><ellipse cx="70" cy="26" rx="7" ry="7" fill="#f0d840"></ellipse><circle cx="67" cy="25" r="2" fill="white"></circle><circle cx="73" cy="25" r="2" fill="white"></circle><circle cx="67.5" cy="25.5" r="1" fill="#222"></circle><circle cx="73.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="70" cy="29" rx="4" ry="2" fill="#c8a820"></ellipse><ellipse cx="61" cy="27" rx="4" ry="6" fill="#e8c832"></ellipse><ellipse cx="79" cy="27" rx="4" ry="6" fill="#e8c832"></ellipse><line x1="66" y1="40" x2="64" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"></line><line x1="74" y1="40" x2="76" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk3"><line x1="120" y1="8" x2="120" y2="22" stroke="#e84040" stroke-width="1.5"></line><ellipse cx="120" cy="6" rx="3" ry="4" fill="#ff6060" stroke="#c02020" stroke-width="0.5"></ellipse><ellipse cx="120" cy="30" rx="9" ry="11" fill="#e84040"></ellipse><ellipse cx="120" cy="26" rx="7" ry="7" fill="#f05050"></ellipse><circle cx="117" cy="25" r="2" fill="white"></circle><circle cx="123" cy="25" r="2" fill="white"></circle><circle cx="117.5" cy="25.5" r="1" fill="#222"></circle><circle cx="123.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="120" cy="29" rx="5" ry="2.5" fill="#c02020"></ellipse><line x1="111" y1="28" x2="106" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="129" y1="28" x2="134" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="116" y1="40" x2="114" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="124" y1="40" x2="126" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk4"><line x1="170" y1="6" x2="170" y2="20" stroke="#7b4faa" stroke-width="1.5"></line><ellipse cx="170" cy="4" rx="4" ry="5" fill="#c090e0" stroke="#7b4faa" stroke-width="0.5"></ellipse><ellipse cx="170" cy="31" rx="11" ry="12" fill="#7b4faa"></ellipse><ellipse cx="170" cy="27" rx="9" ry="9" fill="#9060c0"></ellipse><circle cx="166" cy="26" r="2.5" fill="white"></circle><circle cx="174" cy="26" r="2.5" fill="white"></circle><circle cx="166.5" cy="26.5" r="1.2" fill="#222"></circle><circle cx="174.5" cy="26.5" r="1.2" fill="#222"></circle><ellipse cx="170" cy="31" rx="5" ry="2.5" fill="#5a3080"></ellipse><line x1="159" y1="29" x2="153" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="181" y1="29" x2="187" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="165" y1="42" x2="163" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="175" y1="42" x2="177" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line></g>
+  <g class="pk pk5"><line x1="220" y1="8" x2="220" y2="22" stroke="#ddd" stroke-width="1.5"></line><ellipse cx="220" cy="6" rx="3" ry="4" fill="#ff88aa" stroke="#ddd" stroke-width="0.5"></ellipse><ellipse cx="220" cy="30" rx="8" ry="10" fill="white" stroke="#ddd" stroke-width="1"></ellipse><ellipse cx="220" cy="26" rx="6" ry="6" fill="#f8f8f8"></ellipse><circle cx="217" cy="25" r="2.5" fill="#ff4466"></circle><circle cx="223" cy="25" r="2.5" fill="#ff4466"></circle><circle cx="217.5" cy="25.5" r="1" fill="#222"></circle><circle cx="223.5" cy="25.5" r="1" fill="#222"></circle><line x1="212" y1="28" x2="207" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="228" y1="28" x2="233" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="216" y1="40" x2="214" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="224" y1="40" x2="226" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk6"><line x1="270" y1="6" x2="270" y2="16" stroke="#666" stroke-width="1.5"></line><ellipse cx="270" cy="4" rx="3" ry="4" fill="#aaa" stroke="#666" stroke-width="0.5"></ellipse><ellipse cx="270" cy="28" rx="11" ry="10" fill="#555"></ellipse><ellipse cx="267" cy="24" rx="3" ry="2.5" fill="#777"></ellipse><ellipse cx="274" cy="23" rx="2.5" ry="2" fill="#777"></ellipse><circle cx="266" cy="24" r="2" fill="white"></circle><circle cx="274" cy="23" r="2" fill="white"></circle><circle cx="266.5" cy="24.5" r="1" fill="#222"></circle><circle cx="274.5" cy="23.5" r="1" fill="#222"></circle><line x1="260" y1="30" x2="255" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="280" y1="30" x2="285" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="265" y1="38" x2="263" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="275" y1="38" x2="277" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"></line></g>
 </svg>
 </div>
       <div class="hug-title">💝 需要愛的抱抱</div>
@@ -1559,12 +1941,12 @@ body {
     <div class="hug-header">
       <div style="display:flex;justify-content:center;margin-bottom:8px">
 <svg class="pikmin-svg" viewBox="0 0 320 80" xmlns="http://www.w3.org/2000/svg">
-  <g class="pk pk1"><line x1="20" y1="8" x2="20" y2="22" stroke="#4a90d9" stroke-width="1.5"/><ellipse cx="20" cy="6" rx="3" ry="4" fill="white" stroke="#aaa" stroke-width="0.5"/><ellipse cx="20" cy="30" rx="9" ry="11" fill="#4a90d9"/><ellipse cx="20" cy="26" rx="7" ry="7" fill="#5aa0e8"/><circle cx="17" cy="25" r="2" fill="white"/><circle cx="23" cy="25" r="2" fill="white"/><circle cx="17.5" cy="25.5" r="1" fill="#222"/><circle cx="23.5" cy="25.5" r="1" fill="#222"/><ellipse cx="20" cy="29" rx="4" ry="2" fill="#3a7abf"/><line x1="11" y1="28" x2="6" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="29" y1="28" x2="34" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="16" y1="40" x2="14" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="24" y1="40" x2="26" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk2"><line x1="70" y1="8" x2="70" y2="22" stroke="#e8c832" stroke-width="1.5"/><ellipse cx="70" cy="6" rx="3" ry="4" fill="#f5e070" stroke="#cca820" stroke-width="0.5"/><ellipse cx="70" cy="30" rx="9" ry="11" fill="#e8c832"/><ellipse cx="70" cy="26" rx="7" ry="7" fill="#f0d840"/><circle cx="67" cy="25" r="2" fill="white"/><circle cx="73" cy="25" r="2" fill="white"/><circle cx="67.5" cy="25.5" r="1" fill="#222"/><circle cx="73.5" cy="25.5" r="1" fill="#222"/><ellipse cx="70" cy="29" rx="4" ry="2" fill="#c8a820"/><ellipse cx="61" cy="27" rx="4" ry="6" fill="#e8c832"/><ellipse cx="79" cy="27" rx="4" ry="6" fill="#e8c832"/><line x1="66" y1="40" x2="64" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"/><line x1="74" y1="40" x2="76" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk3"><line x1="120" y1="8" x2="120" y2="22" stroke="#e84040" stroke-width="1.5"/><ellipse cx="120" cy="6" rx="3" ry="4" fill="#ff6060" stroke="#c02020" stroke-width="0.5"/><ellipse cx="120" cy="30" rx="9" ry="11" fill="#e84040"/><ellipse cx="120" cy="26" rx="7" ry="7" fill="#f05050"/><circle cx="117" cy="25" r="2" fill="white"/><circle cx="123" cy="25" r="2" fill="white"/><circle cx="117.5" cy="25.5" r="1" fill="#222"/><circle cx="123.5" cy="25.5" r="1" fill="#222"/><ellipse cx="120" cy="29" rx="5" ry="2.5" fill="#c02020"/><line x1="111" y1="28" x2="106" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="129" y1="28" x2="134" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="116" y1="40" x2="114" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="124" y1="40" x2="126" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk4"><line x1="170" y1="6" x2="170" y2="20" stroke="#7b4faa" stroke-width="1.5"/><ellipse cx="170" cy="4" rx="4" ry="5" fill="#c090e0" stroke="#7b4faa" stroke-width="0.5"/><ellipse cx="170" cy="31" rx="11" ry="12" fill="#7b4faa"/><ellipse cx="170" cy="27" rx="9" ry="9" fill="#9060c0"/><circle cx="166" cy="26" r="2.5" fill="white"/><circle cx="174" cy="26" r="2.5" fill="white"/><circle cx="166.5" cy="26.5" r="1.2" fill="#222"/><circle cx="174.5" cy="26.5" r="1.2" fill="#222"/><ellipse cx="170" cy="31" rx="5" ry="2.5" fill="#5a3080"/><line x1="159" y1="29" x2="153" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="181" y1="29" x2="187" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="165" y1="42" x2="163" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="175" y1="42" x2="177" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/></g>
-  <g class="pk pk5"><line x1="220" y1="8" x2="220" y2="22" stroke="#ddd" stroke-width="1.5"/><ellipse cx="220" cy="6" rx="3" ry="4" fill="#ff88aa" stroke="#ddd" stroke-width="0.5"/><ellipse cx="220" cy="30" rx="8" ry="10" fill="white" stroke="#ddd" stroke-width="1"/><ellipse cx="220" cy="26" rx="6" ry="6" fill="#f8f8f8"/><circle cx="217" cy="25" r="2.5" fill="#ff4466"/><circle cx="223" cy="25" r="2.5" fill="#ff4466"/><circle cx="217.5" cy="25.5" r="1" fill="#222"/><circle cx="223.5" cy="25.5" r="1" fill="#222"/><line x1="212" y1="28" x2="207" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="228" y1="28" x2="233" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="216" y1="40" x2="214" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="224" y1="40" x2="226" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk6"><line x1="270" y1="6" x2="270" y2="16" stroke="#666" stroke-width="1.5"/><ellipse cx="270" cy="4" rx="3" ry="4" fill="#aaa" stroke="#666" stroke-width="0.5"/><ellipse cx="270" cy="28" rx="11" ry="10" fill="#555"/><ellipse cx="267" cy="24" rx="3" ry="2.5" fill="#777"/><ellipse cx="274" cy="23" rx="2.5" ry="2" fill="#777"/><circle cx="266" cy="24" r="2" fill="white"/><circle cx="274" cy="23" r="2" fill="white"/><circle cx="266.5" cy="24.5" r="1" fill="#222"/><circle cx="274.5" cy="23.5" r="1" fill="#222"/><line x1="260" y1="30" x2="255" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="280" y1="30" x2="285" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="265" y1="38" x2="263" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="275" y1="38" x2="277" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"/></g>
+  <g class="pk pk1"><line x1="20" y1="8" x2="20" y2="22" stroke="#4a90d9" stroke-width="1.5"></line><ellipse cx="20" cy="6" rx="3" ry="4" fill="white" stroke="#aaa" stroke-width="0.5"></ellipse><ellipse cx="20" cy="30" rx="9" ry="11" fill="#4a90d9"></ellipse><ellipse cx="20" cy="26" rx="7" ry="7" fill="#5aa0e8"></ellipse><circle cx="17" cy="25" r="2" fill="white"></circle><circle cx="23" cy="25" r="2" fill="white"></circle><circle cx="17.5" cy="25.5" r="1" fill="#222"></circle><circle cx="23.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="20" cy="29" rx="4" ry="2" fill="#3a7abf"></ellipse><line x1="11" y1="28" x2="6" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="29" y1="28" x2="34" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="16" y1="40" x2="14" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="24" y1="40" x2="26" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk2"><line x1="70" y1="8" x2="70" y2="22" stroke="#e8c832" stroke-width="1.5"></line><ellipse cx="70" cy="6" rx="3" ry="4" fill="#f5e070" stroke="#cca820" stroke-width="0.5"></ellipse><ellipse cx="70" cy="30" rx="9" ry="11" fill="#e8c832"></ellipse><ellipse cx="70" cy="26" rx="7" ry="7" fill="#f0d840"></ellipse><circle cx="67" cy="25" r="2" fill="white"></circle><circle cx="73" cy="25" r="2" fill="white"></circle><circle cx="67.5" cy="25.5" r="1" fill="#222"></circle><circle cx="73.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="70" cy="29" rx="4" ry="2" fill="#c8a820"></ellipse><ellipse cx="61" cy="27" rx="4" ry="6" fill="#e8c832"></ellipse><ellipse cx="79" cy="27" rx="4" ry="6" fill="#e8c832"></ellipse><line x1="66" y1="40" x2="64" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"></line><line x1="74" y1="40" x2="76" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk3"><line x1="120" y1="8" x2="120" y2="22" stroke="#e84040" stroke-width="1.5"></line><ellipse cx="120" cy="6" rx="3" ry="4" fill="#ff6060" stroke="#c02020" stroke-width="0.5"></ellipse><ellipse cx="120" cy="30" rx="9" ry="11" fill="#e84040"></ellipse><ellipse cx="120" cy="26" rx="7" ry="7" fill="#f05050"></ellipse><circle cx="117" cy="25" r="2" fill="white"></circle><circle cx="123" cy="25" r="2" fill="white"></circle><circle cx="117.5" cy="25.5" r="1" fill="#222"></circle><circle cx="123.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="120" cy="29" rx="5" ry="2.5" fill="#c02020"></ellipse><line x1="111" y1="28" x2="106" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="129" y1="28" x2="134" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="116" y1="40" x2="114" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="124" y1="40" x2="126" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk4"><line x1="170" y1="6" x2="170" y2="20" stroke="#7b4faa" stroke-width="1.5"></line><ellipse cx="170" cy="4" rx="4" ry="5" fill="#c090e0" stroke="#7b4faa" stroke-width="0.5"></ellipse><ellipse cx="170" cy="31" rx="11" ry="12" fill="#7b4faa"></ellipse><ellipse cx="170" cy="27" rx="9" ry="9" fill="#9060c0"></ellipse><circle cx="166" cy="26" r="2.5" fill="white"></circle><circle cx="174" cy="26" r="2.5" fill="white"></circle><circle cx="166.5" cy="26.5" r="1.2" fill="#222"></circle><circle cx="174.5" cy="26.5" r="1.2" fill="#222"></circle><ellipse cx="170" cy="31" rx="5" ry="2.5" fill="#5a3080"></ellipse><line x1="159" y1="29" x2="153" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="181" y1="29" x2="187" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="165" y1="42" x2="163" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="175" y1="42" x2="177" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line></g>
+  <g class="pk pk5"><line x1="220" y1="8" x2="220" y2="22" stroke="#ddd" stroke-width="1.5"></line><ellipse cx="220" cy="6" rx="3" ry="4" fill="#ff88aa" stroke="#ddd" stroke-width="0.5"></ellipse><ellipse cx="220" cy="30" rx="8" ry="10" fill="white" stroke="#ddd" stroke-width="1"></ellipse><ellipse cx="220" cy="26" rx="6" ry="6" fill="#f8f8f8"></ellipse><circle cx="217" cy="25" r="2.5" fill="#ff4466"></circle><circle cx="223" cy="25" r="2.5" fill="#ff4466"></circle><circle cx="217.5" cy="25.5" r="1" fill="#222"></circle><circle cx="223.5" cy="25.5" r="1" fill="#222"></circle><line x1="212" y1="28" x2="207" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="228" y1="28" x2="233" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="216" y1="40" x2="214" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="224" y1="40" x2="226" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk6"><line x1="270" y1="6" x2="270" y2="16" stroke="#666" stroke-width="1.5"></line><ellipse cx="270" cy="4" rx="3" ry="4" fill="#aaa" stroke="#666" stroke-width="0.5"></ellipse><ellipse cx="270" cy="28" rx="11" ry="10" fill="#555"></ellipse><ellipse cx="267" cy="24" rx="3" ry="2.5" fill="#777"></ellipse><ellipse cx="274" cy="23" rx="2.5" ry="2" fill="#777"></ellipse><circle cx="266" cy="24" r="2" fill="white"></circle><circle cx="274" cy="23" r="2" fill="white"></circle><circle cx="266.5" cy="24.5" r="1" fill="#222"></circle><circle cx="274.5" cy="23.5" r="1" fill="#222"></circle><line x1="260" y1="30" x2="255" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="280" y1="30" x2="285" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="265" y1="38" x2="263" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="275" y1="38" x2="277" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"></line></g>
 </svg>
 </div>
       <div class="hug-title">💝 需要愛的抱抱</div>
@@ -1822,6 +2204,34 @@ body {
 <div class="footer">筱君大隊任務追蹤 · 截至 6/12 11:40 更新</div>
 
 <script>
+function copySource(btn) {
+  const html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+  const done = () => {
+    const original = btn.textContent;
+    btn.textContent = '✓ 已複製整份原始碼！';
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.textContent = original;
+      btn.classList.remove('copied');
+    }, 2000);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(html).then(done).catch(() => fallbackCopy(html, done));
+  } else {
+    fallbackCopy(html, done);
+  }
+}
+function fallbackCopy(text, done) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.top = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+  done();
+}
 function toggleGap(uid) {
   const det = document.getElementById('det_' + uid);
   const arr = document.getElementById('arr_' + uid);
@@ -1858,5 +2268,6 @@ function copyMsg(id, btn) {
   });
 }
 </script>
-</body>
-</html>
+
+
+</body></html>
