@@ -1,14 +1,370 @@
-[index.html](https://github.com/user-attachments/files/29004173/index.html)
 <!DOCTYPE html>
-<html lang="zh-TW">
-<head>
+<html lang="zh-TW" style="background-color: transparent;"><head>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.13/html-to-image.min.js" integrity="sha512-iZ2ORl595Wx6miw+GuadDet4WQbdSWS3JLMoNfY8cRGoEFy6oT3G9IbcrBeL6AfkgpA51ETt/faX6yLV+/gFJg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script>
+      (function() {
+        // Capture host references before any artifact code runs: Window.parent
+        // is [Replaceable] (a top-level `var parent` in artifact code would
+        // replace the accessor with a data property), and a top-level
+        // `const crypto` would shadow the global — either would otherwise
+        // silently break the bridge for artifacts that worked before.
+        const realParent = window.parent;
+        const cryptoObj = window.crypto;
+        // crypto.randomUUID exists only in Secure Contexts; fall back to a
+        // unique non-crypto id elsewhere (http://LAN-IP dev flows) —
+        // uniqueness is what the bridge needs, unpredictability is
+        // defense-in-depth on top of the source guards.
+        const newRequestId =
+          cryptoObj && typeof cryptoObj.randomUUID === "function"
+            ? function () { return cryptoObj.randomUUID(); }
+            : function () { return Date.now() + "-" + Math.random(); };
+        const originalConsole = window.console;
+        window.console = {
+          log: (...args) => {
+            originalConsole.log(...args);
+            realParent.postMessage({ type: 'console', message: args.join(' ') }, '*');
+          },
+          error: (...args) => {
+            originalConsole.error(...args);
+            realParent.postMessage({ type: 'console', message: 'Error: ' + args.join(' ') }, '*');
+          },
+          warn: (...args) => {
+            originalConsole.warn(...args);
+            realParent.postMessage({ type: 'console', message: 'Warning: ' + args.join(' ') }, '*');
+          }
+        };
+
+        // Bridge request ids are crypto-random (not sequential) so they
+        // cannot be predicted by other frames in the tab.
+        let callbacksMap = new Map();
+        let streamControllers = new Map();
+        
+        window.claude = {
+          complete: (prompt) => {
+            return new Promise((resolve, reject) => {
+              const id = newRequestId();
+              callbacksMap.set(id, { resolve, reject });
+              realParent.postMessage({ type: 'claudeComplete', id, prompt }, '*');
+            });
+          }
+        };
+
+        window.storage = {
+          get: (key, shared = false) => {
+            return new Promise((resolve, reject) => {
+              const id = newRequestId();
+              callbacksMap.set(id, { resolve, reject });
+              realParent.postMessage({ type: 'storageGet', id, key, shared }, '*');
+            });
+          },
+          set: (key, value, shared = false) => {
+            return new Promise((resolve, reject) => {
+              const id = newRequestId();
+              callbacksMap.set(id, { resolve, reject });
+              realParent.postMessage({ type: 'storageSet', id, key, value, shared }, '*');
+            });
+          },
+          delete: (key, shared = false) => {
+            return new Promise((resolve, reject) => {
+              const id = newRequestId();
+              callbacksMap.set(id, { resolve, reject });
+              realParent.postMessage({ type: 'storageDelete', id, key, shared }, '*');
+            });
+          },
+          list: (prefix, shared = false) => {
+            return new Promise((resolve, reject) => {
+              const id = newRequestId();
+              callbacksMap.set(id, { resolve, reject });
+              realParent.postMessage({ type: 'storageList', id, prefix, shared }, '*');
+            });
+          }
+        };
+
+        let pendingBlobs = new Map();
+        URL.createObjectURL = (blob) => {
+          // Store the blob and create an ID and URL for it
+          const blobId = `blob-${Date.now()}-${Math.random()}`;
+          pendingBlobs.set(blobId, blob);
+          return `blob-request://${blobId}`;
+        };
+
+        URL.revokeObjectURL = (url) => {
+          // Remove the blob from our store
+          const blobId = url.replace("blob-request://", "");
+          pendingBlobs.delete(blobId);
+        };
+
+        const getBlobFromURL = (url) => {
+          const blobId = url.replace("blob-request://", "");
+          return pendingBlobs.get(blobId);
+        };
+
+        // Override global fetch with streaming support
+        window.fetch = (url, init = {}) => {
+          return new Promise((resolve, reject) => {
+            const id = newRequestId();
+            const channelId = `fetch-${id}-${Date.now()}`;
+            
+            callbacksMap.set(id, { 
+              resolve: (response) => {
+                // Null-body statuses: Response(stream, {status: 204}) throws
+                // per the Fetch spec, which would escape this resolver and
+                // hang the artifact's await forever.
+                if (response.status === 204 || response.status === 205 || response.status === 304) {
+                  try {
+                    resolve(new Response(null, {
+                      status: response.status,
+                      statusText: response.statusText,
+                      headers: response.headers
+                    }));
+                  } catch (err) {
+                    // Invalid statusText/header bytes can throw here too.
+                    reject(new TypeError(
+                      'Bridge fetch: unconstructable response (status ' + response.status + ')'
+                    ));
+                  }
+                  return;
+                }
+                // Create a ReadableStream for the response body
+                const stream = new ReadableStream({
+                  start(controller) {
+                    streamControllers.set(channelId, controller);
+                  },
+                  cancel() {
+                    streamControllers.delete(channelId);
+                  }
+                });
+                
+                // Create and return the Response with the stream. Response()
+                // requires status in [200, 599]; an opaque/no-cors fetch
+                // forwards status 0, which would throw here and escape the
+                // resolver, hanging the artifact's await. Surface it as a
+                // network-error-shaped rejection instead.
+                try {
+                  resolve(new Response(stream, {
+                    status: response.status,
+                    statusText: response.statusText,
+                    headers: response.headers
+                  }));
+                } catch (err) {
+                  streamControllers.delete(channelId);
+                  reject(new TypeError(
+                    'Bridge fetch: unconstructable response (status ' + response.status + ')'
+                  ));
+                }
+              },
+              reject,
+              channelId
+            });
+            
+            realParent.postMessage({
+              type: 'proxyFetch',
+              id,
+              url,
+              init,
+              channelId
+            }, '*');
+          });
+        };
+
+        window.addEventListener('message', async (event) => {
+          // Only the embedding parent may drive the bridge — sibling and
+          // nested frames can also postMessage into this window.
+          if (event.source !== realParent) return;
+          if (event.data.type === 'takeScreenshot') {
+            // Echo the request's nonce so the requester can correlate the
+            // reply to ITS request — a reply without the expected nonce
+            // (e.g. from a stale pre-remount artifact) is ignored upstream.
+            const screenshotNonce = event.data.nonce;
+            const rootElement = document.getElementById('artifacts-component-root-html');
+            if (!rootElement) {
+              realParent.postMessage({
+                type: 'screenshotError',
+                nonce: screenshotNonce,
+                error: new Error('Root element not found'),
+              }, '*');
+              return;
+            }
+            // Catch CDN load failures (htmlToImage undefined) and toPng errors
+            // so the parent always gets a response instead of hanging forever.
+            try {
+              const screenshot = await htmlToImage.toPng(rootElement, {
+                imagePlaceholder:
+                  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAA1JREFUGFdjePDgwX8ACOQDoNsk0PMAAAAASUVORK5CYII=",
+              });
+              realParent.postMessage({
+                type: 'screenshotData',
+                nonce: screenshotNonce,
+                data: screenshot,
+              }, '*');
+            } catch (err) {
+              realParent.postMessage({
+                type: 'screenshotError',
+                nonce: screenshotNonce,
+                error: err instanceof Error ? err : new Error(String(err)),
+              }, '*');
+            }
+          } else if (event.data.type === 'claudeComplete') {
+            const callback = callbacksMap.get(event.data.id);
+            if (!callback) return;
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.completion);
+            }
+            callbacksMap.delete(event.data.id);
+          } else if (event.data.type === 'proxyFetchResponse') {
+            const callback = callbacksMap.get(event.data.id);
+            if (!callback) return;
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+              callbacksMap.delete(event.data.id);
+            } else {
+              // Initial response with headers, status, etc.
+              callback.resolve({
+                status: event.data.status,
+                statusText: event.data.statusText,
+                headers: event.data.headers
+              });
+              // Don't delete the callback yet if streaming
+              if (!event.data.body) {
+                callbacksMap.delete(event.data.id);
+              }
+            }
+          } else if (event.data.type === 'proxyFetchStream') {
+            // Handle streaming data chunks
+            const controller = streamControllers.get(event.data.channelId);
+            if (controller) {
+              if (event.data.error) {
+                controller.error(new Error(event.data.error));
+                streamControllers.delete(event.data.channelId);
+              } else if (event.data.done) {
+                controller.close();
+                streamControllers.delete(event.data.channelId);
+                // Clean up the callback
+                const callback = Array.from(callbacksMap.entries()).find(
+                  ([_, value]) => value.channelId === event.data.channelId
+                );
+                if (callback) {
+                  callbacksMap.delete(callback[0]);
+                }
+              } else if (event.data.chunk) {
+                controller.enqueue(new Uint8Array(event.data.chunk));
+              }
+            }
+          } else if (event.data.type === 'storageGet') {
+            const callback = callbacksMap.get(event.data.id);
+            if (!callback) return;
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.result);
+            }
+            callbacksMap.delete(event.data.id);
+          } else if (event.data.type === 'storageSet') {
+            const callback = callbacksMap.get(event.data.id);
+            if (!callback) return;
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.result);
+            }
+            callbacksMap.delete(event.data.id);
+          } else if (event.data.type === 'storageDelete') {
+            const callback = callbacksMap.get(event.data.id);
+            if (!callback) return;
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.result);
+            }
+            callbacksMap.delete(event.data.id);
+          } else if (event.data.type === 'storageList') {
+            const callback = callbacksMap.get(event.data.id);
+            if (!callback) return;
+            if (event.data.error) {
+              callback.reject(new Error(event.data.error));
+            } else {
+              callback.resolve(event.data.result);
+            }
+            callbacksMap.delete(event.data.id);
+          }
+        });
+
+        window.addEventListener('click', (event) => {
+          const isEl = event.target instanceof HTMLElement;
+          if (!isEl) return;
+    
+          // find ancestor links
+          const linkEl = event.target.closest("a");
+          if (!linkEl || !linkEl.href) return;
+    
+          event.preventDefault();
+          event.stopImmediatePropagation();
+    
+          if (linkEl.href.startsWith("blob-request:")) {
+            const blob = getBlobFromURL(linkEl.href);
+            if (!blob) return;
+            void blob.arrayBuffer().then((data) => {
+              realParent.postMessage({
+                type: "downloadFile",
+                filename: linkEl.download,
+                data,
+                mimeType: blob.type || "application/octet-stream",
+              });
+            });
+          } else if (linkEl.href.startsWith("data:")) {
+            const [header, base64Data] = linkEl.href.split(",");
+            const mimeMatch = header.match(/data:([^;]+)/);
+            const mimeType = mimeMatch ? mimeMatch[1] : "application/octet-stream";
+            const binaryString = atob(base64Data);
+            const data = Uint8Array.from(binaryString, (c) =>
+              c.charCodeAt(0),
+            ).buffer;
+            realParent.postMessage({
+              type: "downloadFile",
+              filename: linkEl.download,
+              data,
+              mimeType,
+            });
+          } else {
+            let linkUrl;
+            try {
+              linkUrl = new URL(linkEl.href);
+            } catch (error) {
+              return;
+            }
+    
+            if (linkUrl.hostname === window.location.hostname) return;
+      
+            realParent.postMessage({
+              type: 'openExternal',
+              href: linkEl.href,
+            }, '*');
+          }
+      });
+
+        const originalOpen = window.open;
+        window.open = function (url) {
+          realParent.postMessage({
+            type: "openExternal",
+            href: url,
+          }, "*");
+        };
+
+        window.addEventListener('error', (event) => {
+          realParent.postMessage({ type: 'console', message: 'Uncaught Error: ' + event.message }, '*');
+        });
+      })();
+    </script>
+  
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>筱君大隊 任務追蹤</title>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&amp;display=swap" rel="stylesheet">
 <style>
 :root {
   --bg: #0f0f13;
@@ -102,6 +458,41 @@ body {
   border-radius: 20px;
   margin-top: 10px;
 }
+
+/* XinCheng Activity Section */
+.xc-section {
+  background: linear-gradient(135deg, #12211a 0%, #0f1a14 100%);
+  border-bottom: 1px solid rgba(90,184,120,0.2);
+  padding: 1rem;
+}
+.xc-title {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em;
+  color: var(--green); text-transform: uppercase;
+  margin-bottom: 10px; display: flex; align-items: center; gap: 6px;
+}
+.xc-grid { display: flex; flex-direction: column; gap: 7px; }
+.xc-item {
+  background: var(--bg2);
+  border: 1px solid rgba(90,184,120,0.18);
+  border-radius: 12px; padding: 10px 14px;
+  cursor: pointer; display: flex; align-items: center;
+  justify-content: space-between; gap: 10px;
+  transition: background 0.15s, border-color 0.15s;
+  -webkit-tap-highlight-color: transparent; user-select: none;
+}
+.xc-item:active { background: rgba(90,184,120,0.1); border-color: rgba(90,184,120,0.4); }
+.xc-item.copied { border-color: var(--green); background: rgba(90,184,120,0.12); }
+.xc-left { flex: 1; min-width: 0; }
+.xc-day { font-size: 10px; font-weight: 700; color: var(--green); margin-bottom: 2px; letter-spacing: 0.04em; }
+.xc-name { font-size: 13px; font-weight: 700; color: var(--text); }
+.xc-link { font-size: 10px; color: var(--text3); margin-top: 2px; word-break: break-all; }
+.xc-copy-btn {
+  font-size: 11px; font-weight: 700; color: var(--green);
+  background: rgba(90,184,120,0.12); border: 1px solid rgba(90,184,120,0.25);
+  border-radius: 8px; padding: 4px 10px; flex-shrink: 0;
+  transition: background 0.15s;
+}
+.xc-item.copied .xc-copy-btn { background: var(--green); color: #fff; }
 
 /* Daily Rally */
 .rally-section {
@@ -671,25 +1062,71 @@ body {
 
 </style>
 </head>
-<body>
+<body id="artifacts-component-root-html" style="background-color: transparent;">
 
 <div class="header">
   <div class="header-badge">筱君大隊</div>
   <h1>🏆 任務追蹤儀表板</h1>
   <div class="sub">第4週 6/15（一）～ 6/21（日）</div>
-  <div class="date">截至 6/15 09:32 更新（已含全隊24人）</div>
+  <div class="date">截至 6/17 21:20 更新（已含全隊24人）</div>
   <div class="week-tag">🆕 新的一週開始！本週特殊任務與定課歸零重新計算</div>
   <button class="source-copy-btn" id="sourceCopyBtn" onclick="copySource(this)">📋 複製整份原始碼（貼到 GitHub）</button>
 </div>
 
+<div class="xc-section">
+  <div class="xc-title">🌿 心成活動！點擊直接複製</div>
+  <div class="xc-grid">
+
+    <div class="xc-item" onclick="xcCopy(this, '【巨笑線上共修】週一 晚上9:00\nhttps://line.me/ti/g2/ChZrKE3QdfzXsC5mF55zJzhn8a9V8TbO_dE_7g?utm_source=invitation&amp;utm_medium=link_copy&amp;utm_campaign=default')">
+      <div class="xc-left">
+        <div class="xc-day">週一 晚上 9:00</div>
+        <div class="xc-name">🌙 巨笑線上共修</div>
+        <div class="xc-link">line.me/ti/g2/ChZrKE3...</div>
+      </div>
+      <div class="xc-copy-btn">複製</div>
+    </div>
+
+    <div class="xc-item" onclick="xcCopy(this, '【破曉打拳上線】週三、週六 早上5:00\nhttps://pse.is/95s5ln')">
+      <div class="xc-left">
+        <div class="xc-day">週三、週六 早上 5:00</div>
+        <div class="xc-name">🥊 破曉打拳上線</div>
+        <div class="xc-link">pse.is/95s5ln</div>
+      </div>
+      <div class="xc-copy-btn">複製</div>
+    </div>
+
+    <div class="xc-item" onclick="xcCopy(this, '【創造線上共修】週五 早上8:00\n\n您已被邀請加入「心成創造社群」！請點選以下連結加入社群！\nhttps://line.me/ti/g2/hOZbxHJ2UPkvmsGTapXH-wTC5Hc0a9ZpFgHQRw?utm_source=invitation&amp;utm_medium=link_copy&amp;utm_campaign=default')">
+      <div class="xc-left">
+        <div class="xc-day">週五 早上 8:00</div>
+        <div class="xc-name">✨ 創造線上共修</div>
+        <div class="xc-link">心成創造社群 line.me/ti/g2/hOZbxHJ2...</div>
+      </div>
+      <div class="xc-copy-btn">複製</div>
+    </div>
+
+    <div class="xc-item" onclick="xcCopy(this, '【大安森林公園晨運班】週六 早上7:00\n📍 大安森林公園（實體，無需連結）')">
+      <div class="xc-left">
+        <div class="xc-day">週六 早上 7:00</div>
+        <div class="xc-name">🌳 大安森林公園晨運班</div>
+        <div class="xc-link">📍 實體活動・大安森林公園</div>
+      </div>
+      <div class="xc-copy-btn">複製</div>
+    </div>
+
+  </div>
+</div>
+
 <div class="rally-section" id="rallySection">
   <div class="rally-day-row">
-    <span class="rally-day-label" id="rallyDayLabel">📅 第 X 天</span>
-    <span class="rally-day-count" id="rallyDayCount">還剩 X 天 · 共 58 天</span>
+    <span class="rally-day-label" id="rallyDayLabel">📅 第 24 天（今天）</span>
+    <span class="rally-day-count" id="rallyDayCount">還剩 34 天 · 共 58 天</span>
   </div>
-  <div class="rally-progress" id="rallyProgress"></div>
-  <div class="rally-quote" id="rallyQuote">載入中…</div>
-  <div class="rally-sub" id="rallySub"></div>
+  <div class="rally-progress" id="rallyProgress"><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot past"></div><div class="rally-dot today"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div><div class="rally-dot future"></div></div>
+  <div class="rally-quote" id="rallyQuote">🏄 Day 24｜有些天很順，有些天很難</div>
+  <div class="rally-sub" id="rallySub">這兩種天，你都能過。難的那天，你撐過去了，這才是真正的成長。
+不管今天是哪種——先打卡，再說。
+
+定課打卡！💪</div>
   <div class="rally-actions">
     <button class="rally-copy-btn" id="rallyCopyBtn" onclick="copyRally(this)">📣 複製今日精神喊話 ↗</button>
     <button class="rally-nav-btn" onclick="showRallyDay(-1)">← 昨日</button>
@@ -721,50 +1158,39 @@ body {
     <div class="hug-header">
       <div style="display:flex;justify-content:center;margin-bottom:8px">
 <svg class="pikmin-svg" viewBox="0 0 320 80" xmlns="http://www.w3.org/2000/svg">
-  <g class="pk pk1"><line x1="20" y1="8" x2="20" y2="22" stroke="#4a90d9" stroke-width="1.5"/><ellipse cx="20" cy="6" rx="3" ry="4" fill="white" stroke="#aaa" stroke-width="0.5"/><ellipse cx="20" cy="30" rx="9" ry="11" fill="#4a90d9"/><ellipse cx="20" cy="26" rx="7" ry="7" fill="#5aa0e8"/><circle cx="17" cy="25" r="2" fill="white"/><circle cx="23" cy="25" r="2" fill="white"/><circle cx="17.5" cy="25.5" r="1" fill="#222"/><circle cx="23.5" cy="25.5" r="1" fill="#222"/><ellipse cx="20" cy="29" rx="4" ry="2" fill="#3a7abf"/><line x1="11" y1="28" x2="6" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="29" y1="28" x2="34" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="16" y1="40" x2="14" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="24" y1="40" x2="26" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk2"><line x1="70" y1="8" x2="70" y2="22" stroke="#e8c832" stroke-width="1.5"/><ellipse cx="70" cy="6" rx="3" ry="4" fill="#f5e070" stroke="#cca820" stroke-width="0.5"/><ellipse cx="70" cy="30" rx="9" ry="11" fill="#e8c832"/><ellipse cx="70" cy="26" rx="7" ry="7" fill="#f0d840"/><circle cx="67" cy="25" r="2" fill="white"/><circle cx="73" cy="25" r="2" fill="white"/><circle cx="67.5" cy="25.5" r="1" fill="#222"/><circle cx="73.5" cy="25.5" r="1" fill="#222"/><ellipse cx="70" cy="29" rx="4" ry="2" fill="#c8a820"/><ellipse cx="61" cy="27" rx="4" ry="6" fill="#e8c832"/><ellipse cx="79" cy="27" rx="4" ry="6" fill="#e8c832"/><line x1="66" y1="40" x2="64" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"/><line x1="74" y1="40" x2="76" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk3"><line x1="120" y1="8" x2="120" y2="22" stroke="#e84040" stroke-width="1.5"/><ellipse cx="120" cy="6" rx="3" ry="4" fill="#ff6060" stroke="#c02020" stroke-width="0.5"/><ellipse cx="120" cy="30" rx="9" ry="11" fill="#e84040"/><ellipse cx="120" cy="26" rx="7" ry="7" fill="#f05050"/><circle cx="117" cy="25" r="2" fill="white"/><circle cx="123" cy="25" r="2" fill="white"/><circle cx="117.5" cy="25.5" r="1" fill="#222"/><circle cx="123.5" cy="25.5" r="1" fill="#222"/><ellipse cx="120" cy="29" rx="5" ry="2.5" fill="#c02020"/><line x1="111" y1="28" x2="106" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="129" y1="28" x2="134" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="116" y1="40" x2="114" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="124" y1="40" x2="126" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk4"><line x1="170" y1="6" x2="170" y2="20" stroke="#7b4faa" stroke-width="1.5"/><ellipse cx="170" cy="4" rx="4" ry="5" fill="#c090e0" stroke="#7b4faa" stroke-width="0.5"/><ellipse cx="170" cy="31" rx="11" ry="12" fill="#7b4faa"/><ellipse cx="170" cy="27" rx="9" ry="9" fill="#9060c0"/><circle cx="166" cy="26" r="2.5" fill="white"/><circle cx="174" cy="26" r="2.5" fill="white"/><circle cx="166.5" cy="26.5" r="1.2" fill="#222"/><circle cx="174.5" cy="26.5" r="1.2" fill="#222"/><ellipse cx="170" cy="31" rx="5" ry="2.5" fill="#5a3080"/><line x1="159" y1="29" x2="153" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="181" y1="29" x2="187" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="165" y1="42" x2="163" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="175" y1="42" x2="177" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/></g>
-  <g class="pk pk5"><line x1="220" y1="8" x2="220" y2="22" stroke="#ddd" stroke-width="1.5"/><ellipse cx="220" cy="6" rx="3" ry="4" fill="#ff88aa" stroke="#ddd" stroke-width="0.5"/><ellipse cx="220" cy="30" rx="8" ry="10" fill="white" stroke="#ddd" stroke-width="1"/><ellipse cx="220" cy="26" rx="6" ry="6" fill="#f8f8f8"/><circle cx="217" cy="25" r="2.5" fill="#ff4466"/><circle cx="223" cy="25" r="2.5" fill="#ff4466"/><circle cx="217.5" cy="25.5" r="1" fill="#222"/><circle cx="223.5" cy="25.5" r="1" fill="#222"/><line x1="212" y1="28" x2="207" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="228" y1="28" x2="233" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="216" y1="40" x2="214" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="224" y1="40" x2="226" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk6"><line x1="270" y1="6" x2="270" y2="16" stroke="#666" stroke-width="1.5"/><ellipse cx="270" cy="4" rx="3" ry="4" fill="#aaa" stroke="#666" stroke-width="0.5"/><ellipse cx="270" cy="28" rx="11" ry="10" fill="#555"/><ellipse cx="267" cy="24" rx="3" ry="2.5" fill="#777"/><ellipse cx="274" cy="23" rx="2.5" ry="2" fill="#777"/><circle cx="266" cy="24" r="2" fill="white"/><circle cx="274" cy="23" r="2" fill="white"/><circle cx="266.5" cy="24.5" r="1" fill="#222"/><circle cx="274.5" cy="23.5" r="1" fill="#222"/><line x1="260" y1="30" x2="255" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="280" y1="30" x2="285" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="265" y1="38" x2="263" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="275" y1="38" x2="277" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"/></g>
+  <g class="pk pk1"><line x1="20" y1="8" x2="20" y2="22" stroke="#4a90d9" stroke-width="1.5"></line><ellipse cx="20" cy="6" rx="3" ry="4" fill="white" stroke="#aaa" stroke-width="0.5"></ellipse><ellipse cx="20" cy="30" rx="9" ry="11" fill="#4a90d9"></ellipse><ellipse cx="20" cy="26" rx="7" ry="7" fill="#5aa0e8"></ellipse><circle cx="17" cy="25" r="2" fill="white"></circle><circle cx="23" cy="25" r="2" fill="white"></circle><circle cx="17.5" cy="25.5" r="1" fill="#222"></circle><circle cx="23.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="20" cy="29" rx="4" ry="2" fill="#3a7abf"></ellipse><line x1="11" y1="28" x2="6" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="29" y1="28" x2="34" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="16" y1="40" x2="14" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="24" y1="40" x2="26" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk2"><line x1="70" y1="8" x2="70" y2="22" stroke="#e8c832" stroke-width="1.5"></line><ellipse cx="70" cy="6" rx="3" ry="4" fill="#f5e070" stroke="#cca820" stroke-width="0.5"></ellipse><ellipse cx="70" cy="30" rx="9" ry="11" fill="#e8c832"></ellipse><ellipse cx="70" cy="26" rx="7" ry="7" fill="#f0d840"></ellipse><circle cx="67" cy="25" r="2" fill="white"></circle><circle cx="73" cy="25" r="2" fill="white"></circle><circle cx="67.5" cy="25.5" r="1" fill="#222"></circle><circle cx="73.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="70" cy="29" rx="4" ry="2" fill="#c8a820"></ellipse><ellipse cx="61" cy="27" rx="4" ry="6" fill="#e8c832"></ellipse><ellipse cx="79" cy="27" rx="4" ry="6" fill="#e8c832"></ellipse><line x1="66" y1="40" x2="64" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"></line><line x1="74" y1="40" x2="76" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk3"><line x1="120" y1="8" x2="120" y2="22" stroke="#e84040" stroke-width="1.5"></line><ellipse cx="120" cy="6" rx="3" ry="4" fill="#ff6060" stroke="#c02020" stroke-width="0.5"></ellipse><ellipse cx="120" cy="30" rx="9" ry="11" fill="#e84040"></ellipse><ellipse cx="120" cy="26" rx="7" ry="7" fill="#f05050"></ellipse><circle cx="117" cy="25" r="2" fill="white"></circle><circle cx="123" cy="25" r="2" fill="white"></circle><circle cx="117.5" cy="25.5" r="1" fill="#222"></circle><circle cx="123.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="120" cy="29" rx="5" ry="2.5" fill="#c02020"></ellipse><line x1="111" y1="28" x2="106" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="129" y1="28" x2="134" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="116" y1="40" x2="114" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="124" y1="40" x2="126" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk4"><line x1="170" y1="6" x2="170" y2="20" stroke="#7b4faa" stroke-width="1.5"></line><ellipse cx="170" cy="4" rx="4" ry="5" fill="#c090e0" stroke="#7b4faa" stroke-width="0.5"></ellipse><ellipse cx="170" cy="31" rx="11" ry="12" fill="#7b4faa"></ellipse><ellipse cx="170" cy="27" rx="9" ry="9" fill="#9060c0"></ellipse><circle cx="166" cy="26" r="2.5" fill="white"></circle><circle cx="174" cy="26" r="2.5" fill="white"></circle><circle cx="166.5" cy="26.5" r="1.2" fill="#222"></circle><circle cx="174.5" cy="26.5" r="1.2" fill="#222"></circle><ellipse cx="170" cy="31" rx="5" ry="2.5" fill="#5a3080"></ellipse><line x1="159" y1="29" x2="153" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="181" y1="29" x2="187" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="165" y1="42" x2="163" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="175" y1="42" x2="177" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line></g>
+  <g class="pk pk5"><line x1="220" y1="8" x2="220" y2="22" stroke="#ddd" stroke-width="1.5"></line><ellipse cx="220" cy="6" rx="3" ry="4" fill="#ff88aa" stroke="#ddd" stroke-width="0.5"></ellipse><ellipse cx="220" cy="30" rx="8" ry="10" fill="white" stroke="#ddd" stroke-width="1"></ellipse><ellipse cx="220" cy="26" rx="6" ry="6" fill="#f8f8f8"></ellipse><circle cx="217" cy="25" r="2.5" fill="#ff4466"></circle><circle cx="223" cy="25" r="2.5" fill="#ff4466"></circle><circle cx="217.5" cy="25.5" r="1" fill="#222"></circle><circle cx="223.5" cy="25.5" r="1" fill="#222"></circle><line x1="212" y1="28" x2="207" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="228" y1="28" x2="233" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="216" y1="40" x2="214" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="224" y1="40" x2="226" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk6"><line x1="270" y1="6" x2="270" y2="16" stroke="#666" stroke-width="1.5"></line><ellipse cx="270" cy="4" rx="3" ry="4" fill="#aaa" stroke="#666" stroke-width="0.5"></ellipse><ellipse cx="270" cy="28" rx="11" ry="10" fill="#555"></ellipse><ellipse cx="267" cy="24" rx="3" ry="2.5" fill="#777"></ellipse><ellipse cx="274" cy="23" rx="2.5" ry="2" fill="#777"></ellipse><circle cx="266" cy="24" r="2" fill="white"></circle><circle cx="274" cy="23" r="2" fill="white"></circle><circle cx="266.5" cy="24.5" r="1" fill="#222"></circle><circle cx="274.5" cy="23.5" r="1" fill="#222"></circle><line x1="260" y1="30" x2="255" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="280" y1="30" x2="285" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="265" y1="38" x2="263" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="275" y1="38" x2="277" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"></line></g>
 </svg>
 </div>
-      <div class="hug-title">🎉 今日全員定課達標</div>
+      <div class="hug-title">💝 需要愛的抱抱</div>
       <div class="hug-sub">小隊長請注意！以下夥伴需要你今天主動關心 ✨</div>
     </div>
 
     <div class="hug-cards">
       <div class="hug-card">
-        <div class="hug-name">⚠️ 王岑芯</div>
-        <div class="hug-score">定課完成 0/3 ｜ 本週積分 0</div>
-        <div class="hug-block">
-          <div class="hug-label">📋 今日定課狀況</div>
-          <div class="hug-text">完成 0 項，尚差 3 項未打卡。本週特殊任務尚未開始。</div>
-        </div>
-        <div class="hug-block">
-          <div class="hug-label">🕐 近期活動時間</div>
-          <div class="hug-text">6/14 下午11:51 完成定課（打拳、五感恩、蔬食）</div>
-        </div>
-        <div class="hug-block">
-          <div class="hug-label">💌 建議行動</div>
-          <div class="hug-text">請小隊長今天直接私訊關心，確認是否需要協助。</div>
-        </div>
+        <div class="hug-name">⚠️ 王岑芯（副隊長）</div>
+        <div class="hug-score">定課 3/3 ✓ ｜本週積分 300</div>
+        <div class="hug-block"><div class="hug-label">📋 今日定課</div><div class="hug-text">今日完成感恩冥想、亥時入睡、一日一蔬食，有進步！</div></div>
+        <div class="hug-block"><div class="hug-label">🕐 近期活動</div><div class="hug-text">最後活動 6/17 下午12:34</div></div>
+        <div class="hug-block"><div class="hug-label">💌 建議行動</div><div class="hug-text">特殊任務只完成天使通話1項，提醒本週還有7項等著她！</div></div>
       </div>
       <div class="hug-card">
         <div class="hug-name">⚠️ 黃芯璿</div>
-        <div class="hug-score">定課完成 0/3 ｜ 本週積分 0</div>
-        <div class="hug-block">
-          <div class="hug-label">📋 今日定課狀況</div>
-          <div class="hug-text">完成 0 項，尚差 3 項未打卡。本週特殊任務尚未開始。</div>
-        </div>
-        <div class="hug-block">
-          <div class="hug-label">🕐 近期活動時間</div>
-          <div class="hug-text">6/14 下午09:09 最後登入（完成蔬食、打拳）</div>
-        </div>
-        <div class="hug-block">
-          <div class="hug-label">💌 建議行動</div>
-          <div class="hug-text">請小隊長今天關心一下她是否有困難需要幫助。</div>
-        </div>
+        <div class="hug-score">定課 0/3 ✗ ｜本週積分 0</div>
+        <div class="hug-block"><div class="hug-label">📋 今日定課</div><div class="hug-text">今日無任何打卡，本週積分仍為0。</div></div>
+        <div class="hug-block"><div class="hug-label">🕐 近期活動</div><div class="hug-text">最後活動停在 6/14 下午09:09，已停止超過2天！</div></div>
+        <div class="hug-block"><div class="hug-label">💌 建議行動</div><div class="hug-text">請隊長今天直接私訊關心，確認她是否有困難需要幫助。</div></div>
+      </div>
+      <div class="hug-card">
+        <div class="hug-name">⚠️ 鄒念穎</div>
+        <div class="hug-score">定課 3/3（6/15）｜今日未見新打卡</div>
+        <div class="hug-block"><div class="hug-label">📋 今日定課</div><div class="hug-text">今日無新打卡，上次定課在6/15完成。</div></div>
+        <div class="hug-block"><div class="hug-label">🕐 近期活動</div><div class="hug-text">最後活動 6/15 下午11:16</div></div>
+        <div class="hug-block"><div class="hug-label">💌 建議行動</div><div class="hug-text">提醒今天記得補打定課！特殊任務0項，需要加油衝刺。</div></div>
       </div>
     </div>
   </div>
@@ -777,23 +1203,23 @@ body {
         <div class="gc-row">
           <div class="gc-bar-wrap" onclick="toggleGap('g9chart_王薏涵')">
             <div class="gc-name" style="color:#a78bfa">王薏涵</div>
-            <div class="gc-track"><div class="gc-fill" style="width:62%;background:#a78bfa"><span class="gc-fill-txt">5/8</span></div></div>
-            <div class="gc-pct" style="color:#5ab878">62%</div>
+            <div class="gc-track"><div class="gc-fill" style="width:50%;background:#a78bfa"><span class="gc-fill-txt">4/8</span></div></div>
+            <div class="gc-pct" style="color:#5ab878">50%</div>
             <div class="gc-arrow" id="arr_g9chart_王薏涵">▼</div>
           </div>
           <div class="gc-detail" id="det_g9chart_王薏涵">
-            <div class="gc-section-label">✅ 已完成（5 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 欣賞夥伴</span><span class="gc-chip gc-done">✓ 天使通話</span><span class="gc-chip gc-done">✓ 親證分享</span><span class="gc-chip gc-done">✓ 圓夢計劃親證(x2)</span><span class="gc-chip gc-done">✓ 參加心成活動(x1)</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（3 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 蓋雅的召喚</span><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
+            <div class="gc-section-label">✅ 已完成（4 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 欣賞夥伴</span><span class="gc-chip gc-done">✓ 親證分享</span><span class="gc-chip gc-done">✓ 圓夢計劃親證(x2)</span><span class="gc-chip gc-done">✓ 參加心成活動(x1)</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（4 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 蓋雅的召喚</span><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
           </div>
         </div>
         <div class="gc-row">
           <div class="gc-bar-wrap" onclick="toggleGap('g9chart_王岑芯')">
             <div class="gc-name" style="color:#60a5fa">王岑芯</div>
-            <div class="gc-track"><div class="gc-fill" style="width:0%;background:#60a5fa"><span class="gc-fill-txt">0/8</span></div></div>
-            <div class="gc-pct" style="color:#e05c5c">0%</div>
+            <div class="gc-track"><div class="gc-fill" style="width:12%;background:#60a5fa"><span class="gc-fill-txt">1/8</span></div></div>
+            <div class="gc-pct" style="color:#e05c5c">12%</div>
             <div class="gc-arrow" id="arr_g9chart_王岑芯">▼</div>
           </div>
           <div class="gc-detail" id="det_g9chart_王岑芯">
-            <div class="gc-section-label">✅ 已完成（0 項）</div><div class="gc-chips"><span style="color:#8a8880;font-size:10px">尚未完成任何任務</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（8 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 蓋雅的召喚</span><span class="gc-chip gc-miss">✗ 欣賞夥伴</span><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 親證分享</span><span class="gc-chip gc-miss">✗ 圓夢計劃親證(x2)</span><span class="gc-chip gc-miss">✗ 參加心成活動(x1)</span><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
+            <div class="gc-section-label">✅ 已完成（1 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 天使通話</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（7 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 蓋雅的召喚</span><span class="gc-chip gc-miss">✗ 欣賞夥伴</span><span class="gc-chip gc-miss">✗ 親證分享</span><span class="gc-chip gc-miss">✗ 圓夢計劃親證(x2)</span><span class="gc-chip gc-miss">✗ 參加心成活動(x1)</span><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
           </div>
         </div>
         <div class="gc-row">
@@ -832,23 +1258,23 @@ body {
         <div class="gc-row">
           <div class="gc-bar-wrap" onclick="toggleGap('g9chart_黃雅琪')">
             <div class="gc-name" style="color:#e879f9">黃雅琪</div>
-            <div class="gc-track"><div class="gc-fill" style="width:37%;background:#e879f9"><span class="gc-fill-txt">3/8</span></div></div>
-            <div class="gc-pct" style="color:#fbbf24">37%</div>
+            <div class="gc-track"><div class="gc-fill" style="width:50%;background:#e879f9"><span class="gc-fill-txt">4/8</span></div></div>
+            <div class="gc-pct" style="color:#5ab878">50%</div>
             <div class="gc-arrow" id="arr_g9chart_黃雅琪">▼</div>
           </div>
           <div class="gc-detail" id="det_g9chart_黃雅琪">
-            <div class="gc-section-label">✅ 已完成（3 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 圓夢計劃親證(x2)</span><span class="gc-chip gc-done">✓ 參加心成活動(x1)</span><span class="gc-chip gc-done">✓ 巔峰取經</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（5 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 蓋雅的召喚</span><span class="gc-chip gc-miss">✗ 欣賞夥伴</span><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 親證分享</span><span class="gc-chip gc-miss">✗ 主題親證2</span></div>
+            <div class="gc-section-label">✅ 已完成（4 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 蓋雅的召喚</span><span class="gc-chip gc-done">✓ 圓夢計劃親證(x2)</span><span class="gc-chip gc-done">✓ 參加心成活動(x1)</span><span class="gc-chip gc-done">✓ 巔峰取經</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（4 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 欣賞夥伴</span><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 親證分享</span><span class="gc-chip gc-miss">✗ 主題親證2</span></div>
           </div>
         </div>
         <div class="gc-row">
           <div class="gc-bar-wrap" onclick="toggleGap('g9chart_廖志裕')">
             <div class="gc-name" style="color:#fb923c">廖志裕</div>
-            <div class="gc-track"><div class="gc-fill" style="width:25%;background:#fb923c"><span class="gc-fill-txt">2/8</span></div></div>
-            <div class="gc-pct" style="color:#fbbf24">25%</div>
+            <div class="gc-track"><div class="gc-fill" style="width:37%;background:#fb923c"><span class="gc-fill-txt">3/8</span></div></div>
+            <div class="gc-pct" style="color:#fbbf24">37%</div>
             <div class="gc-arrow" id="arr_g9chart_廖志裕">▼</div>
           </div>
           <div class="gc-detail" id="det_g9chart_廖志裕">
-            <div class="gc-section-label">✅ 已完成（2 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 親證分享</span><span class="gc-chip gc-done">✓ 主題親證2</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（6 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 蓋雅的召喚</span><span class="gc-chip gc-miss">✗ 欣賞夥伴</span><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 圓夢計劃親證(x2)</span><span class="gc-chip gc-miss">✗ 參加心成活動(x1)</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
+            <div class="gc-section-label">✅ 已完成（3 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 欣賞夥伴</span><span class="gc-chip gc-done">✓ 親證分享</span><span class="gc-chip gc-done">✓ 主題親證2</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（5 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 蓋雅的召喚</span><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 圓夢計劃親證(x2)</span><span class="gc-chip gc-miss">✗ 參加心成活動(x1)</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
           </div>
         </div>
     </div>
@@ -948,15 +1374,15 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-purple">薏</div><div><div class="card-name">王薏涵</div><div class="card-role">孫悟空（隊長）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">25,640</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">3,040</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+420</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">26,080</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">3,480</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">破曉打拳</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
       <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name done">天使通話</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name done">親證分享</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">圓夢計劃親證(x2)</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">參加心成活動(x1)</span><span class="badge done">✓</span></div>
@@ -964,17 +1390,17 @@ body {
       <div class="task-row"><span class="task-name">巔峰取經</span><span class="badge miss">未做</span></div>
     </div>
 
-    <div class="member-card">
+    <div class="member-card alert">
       <div class="card-top"><div class="avatar av-purple">岑</div><div><div class="card-name">王岑芯</div><div class="card-role">觀音菩薩（副隊長）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">19,400</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">0</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">19,700</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">300</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+300</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">感恩冥想</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name warn">欣賞夥伴</span><span class="badge warn">待確認打卡</span></div>
-      <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">天使通話</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">親證分享</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">圓夢計劃親證(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加心成活動(x1)</span><span class="badge miss">未做</span></div>
@@ -984,7 +1410,7 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-amber">宏</div><div><div class="card-name">王宏榮</div><div class="card-role">哪吒（衝衝）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">25,000</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">4,380</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+560</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">25,760</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">5,140</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+540</div></div></div>
       <div class="section-title">今日定課</div>
       <div class="task-row"><span class="task-num">1</span><span class="task-name done">當下之舞</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-num">2</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
@@ -1038,14 +1464,14 @@ body {
 
     <div class="member-card alert">
       <div class="card-top"><div class="avatar av-red">志</div><div><div class="card-name">廖志裕</div><div class="card-role">白龍馬（丁丁）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">17,160</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">4,560</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">18,040</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">5,440</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name">欣賞夥伴</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name done">親證分享</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">圓夢計劃親證(x2)</span><span class="badge miss">未做</span></div>
@@ -1056,13 +1482,13 @@ body {
 
     <div class="member-card alert">
       <div class="card-top"><div class="avatar av-amber">雅</div><div><div class="card-name">黃雅琪</div><div class="card-role">龍女（抱抱）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">14,200</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">30,900</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+30,000</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">14,900</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">31,600</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
 <div class="section-title">本週特殊任務</div>
-      <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name warn">欣賞夥伴</span><span class="badge warn">待確認打卡</span></div>
       <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name warn">親證分享</span><span class="badge warn">待確認打卡</span></div>
@@ -1087,25 +1513,22 @@ body {
     <div class="hug-header">
       <div style="display:flex;justify-content:center;margin-bottom:8px">
 <svg class="pikmin-svg" viewBox="0 0 320 80" xmlns="http://www.w3.org/2000/svg">
-  <g class="pk pk1"><line x1="20" y1="8" x2="20" y2="22" stroke="#4a90d9" stroke-width="1.5"/><ellipse cx="20" cy="6" rx="3" ry="4" fill="white" stroke="#aaa" stroke-width="0.5"/><ellipse cx="20" cy="30" rx="9" ry="11" fill="#4a90d9"/><ellipse cx="20" cy="26" rx="7" ry="7" fill="#5aa0e8"/><circle cx="17" cy="25" r="2" fill="white"/><circle cx="23" cy="25" r="2" fill="white"/><circle cx="17.5" cy="25.5" r="1" fill="#222"/><circle cx="23.5" cy="25.5" r="1" fill="#222"/><ellipse cx="20" cy="29" rx="4" ry="2" fill="#3a7abf"/><line x1="11" y1="28" x2="6" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="29" y1="28" x2="34" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="16" y1="40" x2="14" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="24" y1="40" x2="26" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk2"><line x1="70" y1="8" x2="70" y2="22" stroke="#e8c832" stroke-width="1.5"/><ellipse cx="70" cy="6" rx="3" ry="4" fill="#f5e070" stroke="#cca820" stroke-width="0.5"/><ellipse cx="70" cy="30" rx="9" ry="11" fill="#e8c832"/><ellipse cx="70" cy="26" rx="7" ry="7" fill="#f0d840"/><circle cx="67" cy="25" r="2" fill="white"/><circle cx="73" cy="25" r="2" fill="white"/><circle cx="67.5" cy="25.5" r="1" fill="#222"/><circle cx="73.5" cy="25.5" r="1" fill="#222"/><ellipse cx="70" cy="29" rx="4" ry="2" fill="#c8a820"/><ellipse cx="61" cy="27" rx="4" ry="6" fill="#e8c832"/><ellipse cx="79" cy="27" rx="4" ry="6" fill="#e8c832"/><line x1="66" y1="40" x2="64" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"/><line x1="74" y1="40" x2="76" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk3"><line x1="120" y1="8" x2="120" y2="22" stroke="#e84040" stroke-width="1.5"/><ellipse cx="120" cy="6" rx="3" ry="4" fill="#ff6060" stroke="#c02020" stroke-width="0.5"/><ellipse cx="120" cy="30" rx="9" ry="11" fill="#e84040"/><ellipse cx="120" cy="26" rx="7" ry="7" fill="#f05050"/><circle cx="117" cy="25" r="2" fill="white"/><circle cx="123" cy="25" r="2" fill="white"/><circle cx="117.5" cy="25.5" r="1" fill="#222"/><circle cx="123.5" cy="25.5" r="1" fill="#222"/><ellipse cx="120" cy="29" rx="5" ry="2.5" fill="#c02020"/><line x1="111" y1="28" x2="106" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="129" y1="28" x2="134" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="116" y1="40" x2="114" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="124" y1="40" x2="126" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk4"><line x1="170" y1="6" x2="170" y2="20" stroke="#7b4faa" stroke-width="1.5"/><ellipse cx="170" cy="4" rx="4" ry="5" fill="#c090e0" stroke="#7b4faa" stroke-width="0.5"/><ellipse cx="170" cy="31" rx="11" ry="12" fill="#7b4faa"/><ellipse cx="170" cy="27" rx="9" ry="9" fill="#9060c0"/><circle cx="166" cy="26" r="2.5" fill="white"/><circle cx="174" cy="26" r="2.5" fill="white"/><circle cx="166.5" cy="26.5" r="1.2" fill="#222"/><circle cx="174.5" cy="26.5" r="1.2" fill="#222"/><ellipse cx="170" cy="31" rx="5" ry="2.5" fill="#5a3080"/><line x1="159" y1="29" x2="153" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="181" y1="29" x2="187" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="165" y1="42" x2="163" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="175" y1="42" x2="177" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/></g>
-  <g class="pk pk5"><line x1="220" y1="8" x2="220" y2="22" stroke="#ddd" stroke-width="1.5"/><ellipse cx="220" cy="6" rx="3" ry="4" fill="#ff88aa" stroke="#ddd" stroke-width="0.5"/><ellipse cx="220" cy="30" rx="8" ry="10" fill="white" stroke="#ddd" stroke-width="1"/><ellipse cx="220" cy="26" rx="6" ry="6" fill="#f8f8f8"/><circle cx="217" cy="25" r="2.5" fill="#ff4466"/><circle cx="223" cy="25" r="2.5" fill="#ff4466"/><circle cx="217.5" cy="25.5" r="1" fill="#222"/><circle cx="223.5" cy="25.5" r="1" fill="#222"/><line x1="212" y1="28" x2="207" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="228" y1="28" x2="233" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="216" y1="40" x2="214" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="224" y1="40" x2="226" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk6"><line x1="270" y1="6" x2="270" y2="16" stroke="#666" stroke-width="1.5"/><ellipse cx="270" cy="4" rx="3" ry="4" fill="#aaa" stroke="#666" stroke-width="0.5"/><ellipse cx="270" cy="28" rx="11" ry="10" fill="#555"/><ellipse cx="267" cy="24" rx="3" ry="2.5" fill="#777"/><ellipse cx="274" cy="23" rx="2.5" ry="2" fill="#777"/><circle cx="266" cy="24" r="2" fill="white"/><circle cx="274" cy="23" r="2" fill="white"/><circle cx="266.5" cy="24.5" r="1" fill="#222"/><circle cx="274.5" cy="23.5" r="1" fill="#222"/><line x1="260" y1="30" x2="255" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="280" y1="30" x2="285" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="265" y1="38" x2="263" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="275" y1="38" x2="277" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"/></g>
+  <g class="pk pk1"><line x1="20" y1="8" x2="20" y2="22" stroke="#4a90d9" stroke-width="1.5"></line><ellipse cx="20" cy="6" rx="3" ry="4" fill="white" stroke="#aaa" stroke-width="0.5"></ellipse><ellipse cx="20" cy="30" rx="9" ry="11" fill="#4a90d9"></ellipse><ellipse cx="20" cy="26" rx="7" ry="7" fill="#5aa0e8"></ellipse><circle cx="17" cy="25" r="2" fill="white"></circle><circle cx="23" cy="25" r="2" fill="white"></circle><circle cx="17.5" cy="25.5" r="1" fill="#222"></circle><circle cx="23.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="20" cy="29" rx="4" ry="2" fill="#3a7abf"></ellipse><line x1="11" y1="28" x2="6" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="29" y1="28" x2="34" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="16" y1="40" x2="14" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="24" y1="40" x2="26" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk2"><line x1="70" y1="8" x2="70" y2="22" stroke="#e8c832" stroke-width="1.5"></line><ellipse cx="70" cy="6" rx="3" ry="4" fill="#f5e070" stroke="#cca820" stroke-width="0.5"></ellipse><ellipse cx="70" cy="30" rx="9" ry="11" fill="#e8c832"></ellipse><ellipse cx="70" cy="26" rx="7" ry="7" fill="#f0d840"></ellipse><circle cx="67" cy="25" r="2" fill="white"></circle><circle cx="73" cy="25" r="2" fill="white"></circle><circle cx="67.5" cy="25.5" r="1" fill="#222"></circle><circle cx="73.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="70" cy="29" rx="4" ry="2" fill="#c8a820"></ellipse><ellipse cx="61" cy="27" rx="4" ry="6" fill="#e8c832"></ellipse><ellipse cx="79" cy="27" rx="4" ry="6" fill="#e8c832"></ellipse><line x1="66" y1="40" x2="64" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"></line><line x1="74" y1="40" x2="76" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk3"><line x1="120" y1="8" x2="120" y2="22" stroke="#e84040" stroke-width="1.5"></line><ellipse cx="120" cy="6" rx="3" ry="4" fill="#ff6060" stroke="#c02020" stroke-width="0.5"></ellipse><ellipse cx="120" cy="30" rx="9" ry="11" fill="#e84040"></ellipse><ellipse cx="120" cy="26" rx="7" ry="7" fill="#f05050"></ellipse><circle cx="117" cy="25" r="2" fill="white"></circle><circle cx="123" cy="25" r="2" fill="white"></circle><circle cx="117.5" cy="25.5" r="1" fill="#222"></circle><circle cx="123.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="120" cy="29" rx="5" ry="2.5" fill="#c02020"></ellipse><line x1="111" y1="28" x2="106" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="129" y1="28" x2="134" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="116" y1="40" x2="114" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="124" y1="40" x2="126" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk4"><line x1="170" y1="6" x2="170" y2="20" stroke="#7b4faa" stroke-width="1.5"></line><ellipse cx="170" cy="4" rx="4" ry="5" fill="#c090e0" stroke="#7b4faa" stroke-width="0.5"></ellipse><ellipse cx="170" cy="31" rx="11" ry="12" fill="#7b4faa"></ellipse><ellipse cx="170" cy="27" rx="9" ry="9" fill="#9060c0"></ellipse><circle cx="166" cy="26" r="2.5" fill="white"></circle><circle cx="174" cy="26" r="2.5" fill="white"></circle><circle cx="166.5" cy="26.5" r="1.2" fill="#222"></circle><circle cx="174.5" cy="26.5" r="1.2" fill="#222"></circle><ellipse cx="170" cy="31" rx="5" ry="2.5" fill="#5a3080"></ellipse><line x1="159" y1="29" x2="153" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="181" y1="29" x2="187" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="165" y1="42" x2="163" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="175" y1="42" x2="177" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line></g>
+  <g class="pk pk5"><line x1="220" y1="8" x2="220" y2="22" stroke="#ddd" stroke-width="1.5"></line><ellipse cx="220" cy="6" rx="3" ry="4" fill="#ff88aa" stroke="#ddd" stroke-width="0.5"></ellipse><ellipse cx="220" cy="30" rx="8" ry="10" fill="white" stroke="#ddd" stroke-width="1"></ellipse><ellipse cx="220" cy="26" rx="6" ry="6" fill="#f8f8f8"></ellipse><circle cx="217" cy="25" r="2.5" fill="#ff4466"></circle><circle cx="223" cy="25" r="2.5" fill="#ff4466"></circle><circle cx="217.5" cy="25.5" r="1" fill="#222"></circle><circle cx="223.5" cy="25.5" r="1" fill="#222"></circle><line x1="212" y1="28" x2="207" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="228" y1="28" x2="233" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="216" y1="40" x2="214" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="224" y1="40" x2="226" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk6"><line x1="270" y1="6" x2="270" y2="16" stroke="#666" stroke-width="1.5"></line><ellipse cx="270" cy="4" rx="3" ry="4" fill="#aaa" stroke="#666" stroke-width="0.5"></ellipse><ellipse cx="270" cy="28" rx="11" ry="10" fill="#555"></ellipse><ellipse cx="267" cy="24" rx="3" ry="2.5" fill="#777"></ellipse><ellipse cx="274" cy="23" rx="2.5" ry="2" fill="#777"></ellipse><circle cx="266" cy="24" r="2" fill="white"></circle><circle cx="274" cy="23" r="2" fill="white"></circle><circle cx="266.5" cy="24.5" r="1" fill="#222"></circle><circle cx="274.5" cy="23.5" r="1" fill="#222"></circle><line x1="260" y1="30" x2="255" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="280" y1="30" x2="285" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="265" y1="38" x2="263" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="275" y1="38" x2="277" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"></line></g>
 </svg>
 </div>
-      <div class="hug-title">💝 需要愛的抱抱</div>
-      <div class="hug-sub">小隊長請注意！以下夥伴需要你今天主動關心 ✨</div>
+      <div class="hug-title">🎉 今日全員積極出動</div>
+      <div class="hug-sub">石破天驚組繼續衝刺！✨</div>
     </div>
     <div class="hug-cards">
       <div class="hug-card">
-        <div class="hug-name">🌟 第十組全員今日定課達標！</div>
-        <div class="hug-score">蔡鎔庄、游佳霖、羅萱、游文君、王依涵、李雯萱 全員完成</div>
-        <div class="hug-block">
-          <div class="hug-label">💪 小隊長今日行動</div>
-          <div class="hug-text">全組定課表現亮眼！今天重點提醒天使通話、欣賞夥伴、圓夢計劃親證等尚未完成的特殊任務，繼續衝刺本週目標！</div>
-        </div>
+        <div class="hug-name">✅ 第十組今日全員積極！</div>
+        <div class="hug-score">游佳霖、游文君、蔡鎔庄今日認真打卡衝刺</div>
+        <div class="hug-block"><div class="hug-label">💪 小隊長今日行動</div><div class="hug-text">繼續鼓勵大家完成本週天使通話配對，並確認剩餘特殊任務進度！</div></div>
       </div>
     </div>
   </div>
@@ -1140,23 +1563,23 @@ body {
         <div class="gc-row">
           <div class="gc-bar-wrap" onclick="toggleGap('g10chart_游文君')">
             <div class="gc-name" style="color:#60a5fa">游文君</div>
-            <div class="gc-track"><div class="gc-fill" style="width:50%;background:#60a5fa"><span class="gc-fill-txt">4/8</span></div></div>
-            <div class="gc-pct" style="color:#5ab878">50%</div>
+            <div class="gc-track"><div class="gc-fill" style="width:75%;background:#60a5fa"><span class="gc-fill-txt">6/8</span></div></div>
+            <div class="gc-pct" style="color:#5ab878">75%</div>
             <div class="gc-arrow" id="arr_g10chart_游文君">▼</div>
           </div>
           <div class="gc-detail" id="det_g10chart_游文君">
-            <div class="gc-section-label">✅ 已完成（4 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 蓋雅的召喚</span><span class="gc-chip gc-done">✓ 親證分享</span><span class="gc-chip gc-done">✓ 參加心成活動(x1)</span><span class="gc-chip gc-done">✓ 巔峰取經</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（4 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 欣賞夥伴</span><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 圓夢計劃親證(x2)</span><span class="gc-chip gc-miss">✗ 主題親證2</span></div>
+            <div class="gc-section-label">✅ 已完成（6 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 蓋雅的召喚</span><span class="gc-chip gc-done">✓ 欣賞夥伴</span><span class="gc-chip gc-done">✓ 天使通話</span><span class="gc-chip gc-done">✓ 親證分享</span><span class="gc-chip gc-done">✓ 圓夢計劃親證(x2)</span><span class="gc-chip gc-done">✓ 參加心成活動(x1)</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（2 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
           </div>
         </div>
         <div class="gc-row">
           <div class="gc-bar-wrap" onclick="toggleGap('g10chart_王依涵')">
             <div class="gc-name" style="color:#f87171">王依涵</div>
-            <div class="gc-track"><div class="gc-fill" style="width:25%;background:#f87171"><span class="gc-fill-txt">2/8</span></div></div>
-            <div class="gc-pct" style="color:#fbbf24">25%</div>
+            <div class="gc-track"><div class="gc-fill" style="width:50%;background:#f87171"><span class="gc-fill-txt">4/8</span></div></div>
+            <div class="gc-pct" style="color:#5ab878">50%</div>
             <div class="gc-arrow" id="arr_g10chart_王依涵">▼</div>
           </div>
           <div class="gc-detail" id="det_g10chart_王依涵">
-            <div class="gc-section-label">✅ 已完成（2 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 欣賞夥伴</span><span class="gc-chip gc-done">✓ 親證分享</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（6 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 蓋雅的召喚</span><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 圓夢計劃親證(x2)</span><span class="gc-chip gc-miss">✗ 參加心成活動(x1)</span><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
+            <div class="gc-section-label">✅ 已完成（4 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 欣賞夥伴</span><span class="gc-chip gc-done">✓ 親證分享</span><span class="gc-chip gc-done">✓ 蓋雅的召喚</span><span class="gc-chip gc-done">✓ 圓夢計劃親證(x2)</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（4 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 參加心成活動(x1)</span><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
           </div>
         </div>
         <div class="gc-row">
@@ -1173,12 +1596,12 @@ body {
         <div class="gc-row">
           <div class="gc-bar-wrap" onclick="toggleGap('g10chart_李雯萱')">
             <div class="gc-name" style="color:#fb923c">李雯萱</div>
-            <div class="gc-track"><div class="gc-fill" style="width:37%;background:#fb923c"><span class="gc-fill-txt">3/8</span></div></div>
-            <div class="gc-pct" style="color:#fbbf24">37%</div>
+            <div class="gc-track"><div class="gc-fill" style="width:50%;background:#fb923c"><span class="gc-fill-txt">4/8</span></div></div>
+            <div class="gc-pct" style="color:#5ab878">50%</div>
             <div class="gc-arrow" id="arr_g10chart_李雯萱">▼</div>
           </div>
           <div class="gc-detail" id="det_g10chart_李雯萱">
-            <div class="gc-section-label">✅ 已完成（3 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 親證分享</span><span class="gc-chip gc-done">✓ 參加心成活動(x1)</span><span class="gc-chip gc-done">✓ 主題親證2</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（5 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 蓋雅的召喚</span><span class="gc-chip gc-miss">✗ 欣賞夥伴</span><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 圓夢計劃親證(x2)</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
+            <div class="gc-section-label">✅ 已完成（4 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 親證分享</span><span class="gc-chip gc-done">✓ 天使通話</span><span class="gc-chip gc-done">✓ 參加心成活動(x1)</span><span class="gc-chip gc-done">✓ 主題親證2</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（4 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 蓋雅的召喚</span><span class="gc-chip gc-miss">✗ 欣賞夥伴</span><span class="gc-chip gc-miss">✗ 圓夢計劃親證(x2)</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
           </div>
         </div>
     </div>
@@ -1278,9 +1701,9 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-purple">庄</div><div><div class="card-name">蔡鎔庄</div><div class="card-role">龍太子（金金）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">31,580</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">960</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+960</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">32,540</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">1,920</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+960</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-num">2</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-num">3</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
@@ -1296,11 +1719,11 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-green">霖</div><div><div class="card-name">游佳霖</div><div class="card-role">孫悟空（隊長）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">29,520</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">36,460</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+31,080</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">31,200</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">38,140</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+1,680</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">參加心成活動(x1)</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name done">流動情緒(觀呼吸)</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">欣賞夥伴</span><span class="badge miss">未做</span></div>
@@ -1314,7 +1737,7 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-amber">萱</div><div><div class="card-name">羅萱</div><div class="card-role">嫦娥（抱抱）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">23,320</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">33,040</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+30,120</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">23,320</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">33,040</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
       <div class="section-title">今日定課</div>
       <div class="task-row"><span class="task-num">1</span><span class="task-name done">流動情緒(觀呼吸)</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-num">2</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
@@ -1332,51 +1755,51 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-green">文</div><div><div class="card-name">游文君</div><div class="card-role">觀音菩薩（副隊長）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">23,260</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">31,700</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+30,980</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">24,900</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">33,340</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+860</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">感恩冥想</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">感恩冥想</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-num">3</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name">欣賞夥伴</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name done">親證分享</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name">圓夢計劃親證(x2)</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name done">參加心成活動(x1)</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name done">巔峰取經</span><span class="badge done">✓</span></div>
-    </div>
-
-    <div class="member-card">
-      <div class="card-top"><div class="avatar av-green">依</div><div><div class="card-name">王依涵</div><div class="card-role">白龍馬（丁丁）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">18,140</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">440</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
-      <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
-<div class="section-title">本週特殊任務</div>
-      <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">天使通話</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">親證分享</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name">圓夢計劃親證(x2)</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name">參加心成活動(x1)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">圓夢計劃親證(x2)</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-name done">參加心成活動(x1)</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">巔峰取經</span><span class="badge miss">未做</span></div>
     </div>
 
-    <div class="member-card alert">
-      <div class="card-top"><div class="avatar av-amber">萱</div><div><div class="card-name">李雯萱</div><div class="card-role">豬八戒（樂樂）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">20,180</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">1,480</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
+    <div class="member-card">
+      <div class="card-top"><div class="avatar av-green">依</div><div><div class="card-name">王依涵</div><div class="card-role">白龍馬（丁丁）</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">19,560</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">1,860</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
       <div class="section-title">今日定課</div>
       <div class="task-row"><span class="task-num">1</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-num">2</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-num">3</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
+      <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">親證分享</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-name done">圓夢計劃親證(x2)</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-name">參加心成活動(x1)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經</span><span class="badge miss">未做</span></div>
+    </div>
+
+    <div class="member-card">
+      <div class="card-top"><div class="avatar av-amber">萱</div><div><div class="card-name">李雯萱</div><div class="card-role">豬八戒（樂樂）</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">21,260</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">2,560</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
+      <div class="section-title">今日定課</div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">流動情緒(觀呼吸)</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
+<div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">欣賞夥伴</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">天使通話</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">親證分享</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">圓夢計劃親證(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name done">參加心成活動(x1)</span><span class="badge done">✓</span></div>
@@ -1399,12 +1822,12 @@ body {
     <div class="hug-header">
       <div style="display:flex;justify-content:center;margin-bottom:8px">
 <svg class="pikmin-svg" viewBox="0 0 320 80" xmlns="http://www.w3.org/2000/svg">
-  <g class="pk pk1"><line x1="20" y1="8" x2="20" y2="22" stroke="#4a90d9" stroke-width="1.5"/><ellipse cx="20" cy="6" rx="3" ry="4" fill="white" stroke="#aaa" stroke-width="0.5"/><ellipse cx="20" cy="30" rx="9" ry="11" fill="#4a90d9"/><ellipse cx="20" cy="26" rx="7" ry="7" fill="#5aa0e8"/><circle cx="17" cy="25" r="2" fill="white"/><circle cx="23" cy="25" r="2" fill="white"/><circle cx="17.5" cy="25.5" r="1" fill="#222"/><circle cx="23.5" cy="25.5" r="1" fill="#222"/><ellipse cx="20" cy="29" rx="4" ry="2" fill="#3a7abf"/><line x1="11" y1="28" x2="6" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="29" y1="28" x2="34" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="16" y1="40" x2="14" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="24" y1="40" x2="26" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk2"><line x1="70" y1="8" x2="70" y2="22" stroke="#e8c832" stroke-width="1.5"/><ellipse cx="70" cy="6" rx="3" ry="4" fill="#f5e070" stroke="#cca820" stroke-width="0.5"/><ellipse cx="70" cy="30" rx="9" ry="11" fill="#e8c832"/><ellipse cx="70" cy="26" rx="7" ry="7" fill="#f0d840"/><circle cx="67" cy="25" r="2" fill="white"/><circle cx="73" cy="25" r="2" fill="white"/><circle cx="67.5" cy="25.5" r="1" fill="#222"/><circle cx="73.5" cy="25.5" r="1" fill="#222"/><ellipse cx="70" cy="29" rx="4" ry="2" fill="#c8a820"/><ellipse cx="61" cy="27" rx="4" ry="6" fill="#e8c832"/><ellipse cx="79" cy="27" rx="4" ry="6" fill="#e8c832"/><line x1="66" y1="40" x2="64" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"/><line x1="74" y1="40" x2="76" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk3"><line x1="120" y1="8" x2="120" y2="22" stroke="#e84040" stroke-width="1.5"/><ellipse cx="120" cy="6" rx="3" ry="4" fill="#ff6060" stroke="#c02020" stroke-width="0.5"/><ellipse cx="120" cy="30" rx="9" ry="11" fill="#e84040"/><ellipse cx="120" cy="26" rx="7" ry="7" fill="#f05050"/><circle cx="117" cy="25" r="2" fill="white"/><circle cx="123" cy="25" r="2" fill="white"/><circle cx="117.5" cy="25.5" r="1" fill="#222"/><circle cx="123.5" cy="25.5" r="1" fill="#222"/><ellipse cx="120" cy="29" rx="5" ry="2.5" fill="#c02020"/><line x1="111" y1="28" x2="106" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="129" y1="28" x2="134" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="116" y1="40" x2="114" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="124" y1="40" x2="126" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk4"><line x1="170" y1="6" x2="170" y2="20" stroke="#7b4faa" stroke-width="1.5"/><ellipse cx="170" cy="4" rx="4" ry="5" fill="#c090e0" stroke="#7b4faa" stroke-width="0.5"/><ellipse cx="170" cy="31" rx="11" ry="12" fill="#7b4faa"/><ellipse cx="170" cy="27" rx="9" ry="9" fill="#9060c0"/><circle cx="166" cy="26" r="2.5" fill="white"/><circle cx="174" cy="26" r="2.5" fill="white"/><circle cx="166.5" cy="26.5" r="1.2" fill="#222"/><circle cx="174.5" cy="26.5" r="1.2" fill="#222"/><ellipse cx="170" cy="31" rx="5" ry="2.5" fill="#5a3080"/><line x1="159" y1="29" x2="153" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="181" y1="29" x2="187" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="165" y1="42" x2="163" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="175" y1="42" x2="177" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/></g>
-  <g class="pk pk5"><line x1="220" y1="8" x2="220" y2="22" stroke="#ddd" stroke-width="1.5"/><ellipse cx="220" cy="6" rx="3" ry="4" fill="#ff88aa" stroke="#ddd" stroke-width="0.5"/><ellipse cx="220" cy="30" rx="8" ry="10" fill="white" stroke="#ddd" stroke-width="1"/><ellipse cx="220" cy="26" rx="6" ry="6" fill="#f8f8f8"/><circle cx="217" cy="25" r="2.5" fill="#ff4466"/><circle cx="223" cy="25" r="2.5" fill="#ff4466"/><circle cx="217.5" cy="25.5" r="1" fill="#222"/><circle cx="223.5" cy="25.5" r="1" fill="#222"/><line x1="212" y1="28" x2="207" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="228" y1="28" x2="233" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="216" y1="40" x2="214" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="224" y1="40" x2="226" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk6"><line x1="270" y1="6" x2="270" y2="16" stroke="#666" stroke-width="1.5"/><ellipse cx="270" cy="4" rx="3" ry="4" fill="#aaa" stroke="#666" stroke-width="0.5"/><ellipse cx="270" cy="28" rx="11" ry="10" fill="#555"/><ellipse cx="267" cy="24" rx="3" ry="2.5" fill="#777"/><ellipse cx="274" cy="23" rx="2.5" ry="2" fill="#777"/><circle cx="266" cy="24" r="2" fill="white"/><circle cx="274" cy="23" r="2" fill="white"/><circle cx="266.5" cy="24.5" r="1" fill="#222"/><circle cx="274.5" cy="23.5" r="1" fill="#222"/><line x1="260" y1="30" x2="255" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="280" y1="30" x2="285" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="265" y1="38" x2="263" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="275" y1="38" x2="277" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"/></g>
+  <g class="pk pk1"><line x1="20" y1="8" x2="20" y2="22" stroke="#4a90d9" stroke-width="1.5"></line><ellipse cx="20" cy="6" rx="3" ry="4" fill="white" stroke="#aaa" stroke-width="0.5"></ellipse><ellipse cx="20" cy="30" rx="9" ry="11" fill="#4a90d9"></ellipse><ellipse cx="20" cy="26" rx="7" ry="7" fill="#5aa0e8"></ellipse><circle cx="17" cy="25" r="2" fill="white"></circle><circle cx="23" cy="25" r="2" fill="white"></circle><circle cx="17.5" cy="25.5" r="1" fill="#222"></circle><circle cx="23.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="20" cy="29" rx="4" ry="2" fill="#3a7abf"></ellipse><line x1="11" y1="28" x2="6" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="29" y1="28" x2="34" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="16" y1="40" x2="14" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="24" y1="40" x2="26" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk2"><line x1="70" y1="8" x2="70" y2="22" stroke="#e8c832" stroke-width="1.5"></line><ellipse cx="70" cy="6" rx="3" ry="4" fill="#f5e070" stroke="#cca820" stroke-width="0.5"></ellipse><ellipse cx="70" cy="30" rx="9" ry="11" fill="#e8c832"></ellipse><ellipse cx="70" cy="26" rx="7" ry="7" fill="#f0d840"></ellipse><circle cx="67" cy="25" r="2" fill="white"></circle><circle cx="73" cy="25" r="2" fill="white"></circle><circle cx="67.5" cy="25.5" r="1" fill="#222"></circle><circle cx="73.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="70" cy="29" rx="4" ry="2" fill="#c8a820"></ellipse><ellipse cx="61" cy="27" rx="4" ry="6" fill="#e8c832"></ellipse><ellipse cx="79" cy="27" rx="4" ry="6" fill="#e8c832"></ellipse><line x1="66" y1="40" x2="64" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"></line><line x1="74" y1="40" x2="76" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk3"><line x1="120" y1="8" x2="120" y2="22" stroke="#e84040" stroke-width="1.5"></line><ellipse cx="120" cy="6" rx="3" ry="4" fill="#ff6060" stroke="#c02020" stroke-width="0.5"></ellipse><ellipse cx="120" cy="30" rx="9" ry="11" fill="#e84040"></ellipse><ellipse cx="120" cy="26" rx="7" ry="7" fill="#f05050"></ellipse><circle cx="117" cy="25" r="2" fill="white"></circle><circle cx="123" cy="25" r="2" fill="white"></circle><circle cx="117.5" cy="25.5" r="1" fill="#222"></circle><circle cx="123.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="120" cy="29" rx="5" ry="2.5" fill="#c02020"></ellipse><line x1="111" y1="28" x2="106" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="129" y1="28" x2="134" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="116" y1="40" x2="114" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="124" y1="40" x2="126" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk4"><line x1="170" y1="6" x2="170" y2="20" stroke="#7b4faa" stroke-width="1.5"></line><ellipse cx="170" cy="4" rx="4" ry="5" fill="#c090e0" stroke="#7b4faa" stroke-width="0.5"></ellipse><ellipse cx="170" cy="31" rx="11" ry="12" fill="#7b4faa"></ellipse><ellipse cx="170" cy="27" rx="9" ry="9" fill="#9060c0"></ellipse><circle cx="166" cy="26" r="2.5" fill="white"></circle><circle cx="174" cy="26" r="2.5" fill="white"></circle><circle cx="166.5" cy="26.5" r="1.2" fill="#222"></circle><circle cx="174.5" cy="26.5" r="1.2" fill="#222"></circle><ellipse cx="170" cy="31" rx="5" ry="2.5" fill="#5a3080"></ellipse><line x1="159" y1="29" x2="153" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="181" y1="29" x2="187" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="165" y1="42" x2="163" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="175" y1="42" x2="177" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line></g>
+  <g class="pk pk5"><line x1="220" y1="8" x2="220" y2="22" stroke="#ddd" stroke-width="1.5"></line><ellipse cx="220" cy="6" rx="3" ry="4" fill="#ff88aa" stroke="#ddd" stroke-width="0.5"></ellipse><ellipse cx="220" cy="30" rx="8" ry="10" fill="white" stroke="#ddd" stroke-width="1"></ellipse><ellipse cx="220" cy="26" rx="6" ry="6" fill="#f8f8f8"></ellipse><circle cx="217" cy="25" r="2.5" fill="#ff4466"></circle><circle cx="223" cy="25" r="2.5" fill="#ff4466"></circle><circle cx="217.5" cy="25.5" r="1" fill="#222"></circle><circle cx="223.5" cy="25.5" r="1" fill="#222"></circle><line x1="212" y1="28" x2="207" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="228" y1="28" x2="233" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="216" y1="40" x2="214" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="224" y1="40" x2="226" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk6"><line x1="270" y1="6" x2="270" y2="16" stroke="#666" stroke-width="1.5"></line><ellipse cx="270" cy="4" rx="3" ry="4" fill="#aaa" stroke="#666" stroke-width="0.5"></ellipse><ellipse cx="270" cy="28" rx="11" ry="10" fill="#555"></ellipse><ellipse cx="267" cy="24" rx="3" ry="2.5" fill="#777"></ellipse><ellipse cx="274" cy="23" rx="2.5" ry="2" fill="#777"></ellipse><circle cx="266" cy="24" r="2" fill="white"></circle><circle cx="274" cy="23" r="2" fill="white"></circle><circle cx="266.5" cy="24.5" r="1" fill="#222"></circle><circle cx="274.5" cy="23.5" r="1" fill="#222"></circle><line x1="260" y1="30" x2="255" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="280" y1="30" x2="285" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="265" y1="38" x2="263" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="275" y1="38" x2="277" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"></line></g>
 </svg>
 </div>
       <div class="hug-title">💝 需要愛的抱抱</div>
@@ -1412,36 +1835,18 @@ body {
     </div>
     <div class="hug-cards">
       <div class="hug-card">
-        <div class="hug-name">⚠️ 黃湘庭</div>
-        <div class="hug-score">定課完成 1/3 ｜ 本週積分 1,220</div>
-        <div class="hug-block">
-          <div class="hug-label">📋 今日定課狀況</div>
-          <div class="hug-text">完成 1 項，尚差 2 項未打卡。已完成：參加心成活動(x1)</div>
-        </div>
-        <div class="hug-block">
-          <div class="hug-label">🕐 近期活動時間</div>
-          <div class="hug-text">6/16 上午06:49 打拳打卡，6/15 下午09:28 參加心成活動</div>
-        </div>
-        <div class="hug-block">
-          <div class="hug-label">💌 建議行動</div>
-          <div class="hug-text">確認今天是否記得補打其餘2項定課，以及本週其他任務進度。</div>
-        </div>
+        <div class="hug-name">⚠️ 賴冠臻（副隊長）</div>
+        <div class="hug-score">定課 0/3 ✗（今日）｜本週積分 300</div>
+        <div class="hug-block"><div class="hug-label">📋 今日定課</div><div class="hug-text">今日無新打卡，6/16完成感恩冥想、五感恩、蔬食3項。</div></div>
+        <div class="hug-block"><div class="hug-label">🕐 近期活動</div><div class="hug-text">最後活動 6/16 下午10:08</div></div>
+        <div class="hug-block"><div class="hug-label">💌 建議行動</div><div class="hug-text">副隊長需要特別支持！請隊長今天私訊關心，一起確認今日計畫。</div></div>
       </div>
       <div class="hug-card">
-        <div class="hug-name">⚠️ 賴冠臻</div>
-        <div class="hug-score">定課完成 1/3 ｜ 本週積分 100</div>
-        <div class="hug-block">
-          <div class="hug-label">📋 今日定課狀況</div>
-          <div class="hug-text">完成 1 項，尚差 2 項未打卡。已完成：親證分享</div>
-        </div>
-        <div class="hug-block">
-          <div class="hug-label">🕐 近期活動時間</div>
-          <div class="hug-text">6/16 上午05:55 蔬食打卡，6/14 下午10:30 親證分享審核通過</div>
-        </div>
-        <div class="hug-block">
-          <div class="hug-label">💌 建議行動</div>
-          <div class="hug-text">作為副隊長需要特別支持，請隊長今天私訊關心並一起確認本週任務計畫。</div>
-        </div>
+        <div class="hug-name">⚠️ 許哲豪</div>
+        <div class="hug-score">定課 0/3 ✗（今日）｜本週積分 1720</div>
+        <div class="hug-block"><div class="hug-label">📋 今日定課</div><div class="hug-text">今日無新打卡，6/16完成4項定課。</div></div>
+        <div class="hug-block"><div class="hug-label">🕐 近期活動</div><div class="hug-text">最後活動 6/16 下午10:59</div></div>
+        <div class="hug-block"><div class="hug-label">💌 建議行動</div><div class="hug-text">提醒今天補打定課！本週特殊任務目前只有親證分享1項，需要加油。</div></div>
       </div>
     </div>
   </div>
@@ -1454,23 +1859,23 @@ body {
         <div class="gc-row">
           <div class="gc-bar-wrap" onclick="toggleGap('g11chart_郭筱婷')">
             <div class="gc-name" style="color:#a78bfa">郭筱婷</div>
-            <div class="gc-track"><div class="gc-fill" style="width:25%;background:#a78bfa"><span class="gc-fill-txt">2/8</span></div></div>
-            <div class="gc-pct" style="color:#fbbf24">25%</div>
+            <div class="gc-track"><div class="gc-fill" style="width:37%;background:#a78bfa"><span class="gc-fill-txt">3/8</span></div></div>
+            <div class="gc-pct" style="color:#fbbf24">37%</div>
             <div class="gc-arrow" id="arr_g11chart_郭筱婷">▼</div>
           </div>
           <div class="gc-detail" id="det_g11chart_郭筱婷">
-            <div class="gc-section-label">✅ 已完成（2 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 蓋雅的召喚</span><span class="gc-chip gc-done">✓ 圓夢計劃親證(x2)</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（6 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 欣賞夥伴</span><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 親證分享</span><span class="gc-chip gc-miss">✗ 參加心成活動(x1)</span><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
+            <div class="gc-section-label">✅ 已完成（3 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 蓋雅的召喚</span><span class="gc-chip gc-done">✓ 欣賞夥伴</span><span class="gc-chip gc-done">✓ 圓夢計劃親證(x2)</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（5 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 親證分享</span><span class="gc-chip gc-miss">✗ 參加心成活動(x1)</span><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
           </div>
         </div>
         <div class="gc-row">
           <div class="gc-bar-wrap" onclick="toggleGap('g11chart_黃湘庭')">
             <div class="gc-name" style="color:#fbbf24">黃湘庭</div>
-            <div class="gc-track"><div class="gc-fill" style="width:12%;background:#fbbf24"><span class="gc-fill-txt">1/8</span></div></div>
-            <div class="gc-pct" style="color:#e05c5c">12%</div>
+            <div class="gc-track"><div class="gc-fill" style="width:25%;background:#fbbf24"><span class="gc-fill-txt">2/8</span></div></div>
+            <div class="gc-pct" style="color:#fbbf24">25%</div>
             <div class="gc-arrow" id="arr_g11chart_黃湘庭">▼</div>
           </div>
           <div class="gc-detail" id="det_g11chart_黃湘庭">
-            <div class="gc-section-label">✅ 已完成（1 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 參加心成活動(x1)</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（7 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 蓋雅的召喚</span><span class="gc-chip gc-miss">✗ 欣賞夥伴</span><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 親證分享</span><span class="gc-chip gc-miss">✗ 圓夢計劃親證(x2)</span><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
+            <div class="gc-section-label">✅ 已完成（2 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 天使通話</span><span class="gc-chip gc-done">✓ 參加心成活動(x1)</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（6 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 蓋雅的召喚</span><span class="gc-chip gc-miss">✗ 欣賞夥伴</span><span class="gc-chip gc-miss">✗ 親證分享</span><span class="gc-chip gc-miss">✗ 圓夢計劃親證(x2)</span><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
           </div>
         </div>
         <div class="gc-row">
@@ -1487,23 +1892,23 @@ body {
         <div class="gc-row">
           <div class="gc-bar-wrap" onclick="toggleGap('g11chart_王芷盈')">
             <div class="gc-name" style="color:#60a5fa">王芷盈</div>
-            <div class="gc-track"><div class="gc-fill" style="width:12%;background:#60a5fa"><span class="gc-fill-txt">1/8</span></div></div>
-            <div class="gc-pct" style="color:#e05c5c">12%</div>
+            <div class="gc-track"><div class="gc-fill" style="width:50%;background:#60a5fa"><span class="gc-fill-txt">4/8</span></div></div>
+            <div class="gc-pct" style="color:#5ab878">50%</div>
             <div class="gc-arrow" id="arr_g11chart_王芷盈">▼</div>
           </div>
           <div class="gc-detail" id="det_g11chart_王芷盈">
-            <div class="gc-section-label">✅ 已完成（1 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 親證分享</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（7 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 蓋雅的召喚</span><span class="gc-chip gc-miss">✗ 欣賞夥伴</span><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 圓夢計劃親證(x2)</span><span class="gc-chip gc-miss">✗ 參加心成活動(x1)</span><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
+            <div class="gc-section-label">✅ 已完成（4 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 蓋雅的召喚</span><span class="gc-chip gc-done">✓ 欣賞夥伴</span><span class="gc-chip gc-done">✓ 天使通話</span><span class="gc-chip gc-done">✓ 親證分享</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（4 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 圓夢計劃親證(x2)</span><span class="gc-chip gc-miss">✗ 參加心成活動(x1)</span><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
           </div>
         </div>
         <div class="gc-row">
           <div class="gc-bar-wrap" onclick="toggleGap('g11chart_陳惠玲')">
             <div class="gc-name" style="color:#34d399">陳惠玲</div>
-            <div class="gc-track"><div class="gc-fill" style="width:12%;background:#34d399"><span class="gc-fill-txt">1/8</span></div></div>
-            <div class="gc-pct" style="color:#e05c5c">12%</div>
+            <div class="gc-track"><div class="gc-fill" style="width:50%;background:#34d399"><span class="gc-fill-txt">4/8</span></div></div>
+            <div class="gc-pct" style="color:#5ab878">50%</div>
             <div class="gc-arrow" id="arr_g11chart_陳惠玲">▼</div>
           </div>
           <div class="gc-detail" id="det_g11chart_陳惠玲">
-            <div class="gc-section-label">✅ 已完成（1 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 主題親證2</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（7 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 蓋雅的召喚</span><span class="gc-chip gc-miss">✗ 欣賞夥伴</span><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 親證分享</span><span class="gc-chip gc-miss">✗ 圓夢計劃親證(x2)</span><span class="gc-chip gc-miss">✗ 參加心成活動(x1)</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
+            <div class="gc-section-label">✅ 已完成（4 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 蓋雅的召喚</span><span class="gc-chip gc-done">✓ 欣賞夥伴</span><span class="gc-chip gc-done">✓ 主題親證2</span><span class="gc-chip gc-done">✓ 圓夢計劃親證(x2)</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（4 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 親證分享</span><span class="gc-chip gc-miss">✗ 參加心成活動(x1)</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
           </div>
         </div>
         <div class="gc-row">
@@ -1615,14 +2020,14 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-purple">筱</div><div><div class="card-name">郭筱婷</div><div class="card-role">孫悟空（隊長）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">26,760</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">1,720</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+1,500</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">27,840</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">2,800</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+1,080</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name">欣賞夥伴</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">親證分享</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name done">圓夢計劃親證(x2)</span><span class="badge done">✓</span></div>
@@ -1633,15 +2038,15 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-amber">湘</div><div><div class="card-name">黃湘庭</div><div class="card-role">豬八戒（樂樂）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">25,520</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">1,220</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+320</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">27,040</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">2,740</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+660</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">欣賞夥伴</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">天使通話</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">親證分享</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">圓夢計劃親證(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name done">參加心成活動(x1)</span><span class="badge done">✓</span></div>
@@ -1651,7 +2056,7 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-amber">哲</div><div><div class="card-name">許哲豪</div><div class="card-role">哪吒（衝衝）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">25,240</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">860</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">26,100</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">1,720</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
       <div class="section-title">今日定課</div>
       <div class="task-row"><span class="task-num">1</span><span class="task-name done">破曉打拳</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-num">2</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
@@ -1669,17 +2074,17 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-green">惠</div><div><div class="card-name">陳惠玲</div><div class="card-role">嫦娥（抱抱）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">24,220</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">1,520</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+760</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">25,760</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">3,060</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+1,540</div></div></div>
       <div class="section-title">今日定課</div>
       <div class="task-row"><span class="task-num">1</span><span class="task-name done">感恩冥想</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-num">2</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-num">3</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
-      <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name">欣賞夥伴</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">親證分享</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name">圓夢計劃親證(x2)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">圓夢計劃親證(x2)</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">參加心成活動(x1)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name done">主題親證2</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">巔峰取經</span><span class="badge miss">未做</span></div>
@@ -1687,15 +2092,15 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-red">芷</div><div><div class="card-name">王芷盈</div><div class="card-role">沙悟淨（丁丁）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">18,700</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">400</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">20,440</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">2,140</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
       <div class="section-title">今日定課</div>
       <div class="task-row"><span class="task-num">1</span><span class="task-name done">當下之舞</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-num">2</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-num">3</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
-      <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name">欣賞夥伴</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-name done">天使通話</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">親證分享</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">圓夢計劃親證(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">參加心成活動(x1)</span><span class="badge miss">未做</span></div>
@@ -1705,11 +2110,11 @@ body {
 
     <div class="member-card alert">
       <div class="card-top"><div class="avatar av-red">冠</div><div><div class="card-name">賴冠臻</div><div class="card-role">唐三藏（副隊長）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">13,400</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">100</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+100</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">13,600</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">300</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">感恩冥想</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">欣賞夥伴</span><span class="badge miss">未做</span></div>
@@ -1736,33 +2141,22 @@ body {
     <div class="hug-header">
       <div style="display:flex;justify-content:center;margin-bottom:8px">
 <svg class="pikmin-svg" viewBox="0 0 320 80" xmlns="http://www.w3.org/2000/svg">
-  <g class="pk pk1"><line x1="20" y1="8" x2="20" y2="22" stroke="#4a90d9" stroke-width="1.5"/><ellipse cx="20" cy="6" rx="3" ry="4" fill="white" stroke="#aaa" stroke-width="0.5"/><ellipse cx="20" cy="30" rx="9" ry="11" fill="#4a90d9"/><ellipse cx="20" cy="26" rx="7" ry="7" fill="#5aa0e8"/><circle cx="17" cy="25" r="2" fill="white"/><circle cx="23" cy="25" r="2" fill="white"/><circle cx="17.5" cy="25.5" r="1" fill="#222"/><circle cx="23.5" cy="25.5" r="1" fill="#222"/><ellipse cx="20" cy="29" rx="4" ry="2" fill="#3a7abf"/><line x1="11" y1="28" x2="6" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="29" y1="28" x2="34" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="16" y1="40" x2="14" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/><line x1="24" y1="40" x2="26" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk2"><line x1="70" y1="8" x2="70" y2="22" stroke="#e8c832" stroke-width="1.5"/><ellipse cx="70" cy="6" rx="3" ry="4" fill="#f5e070" stroke="#cca820" stroke-width="0.5"/><ellipse cx="70" cy="30" rx="9" ry="11" fill="#e8c832"/><ellipse cx="70" cy="26" rx="7" ry="7" fill="#f0d840"/><circle cx="67" cy="25" r="2" fill="white"/><circle cx="73" cy="25" r="2" fill="white"/><circle cx="67.5" cy="25.5" r="1" fill="#222"/><circle cx="73.5" cy="25.5" r="1" fill="#222"/><ellipse cx="70" cy="29" rx="4" ry="2" fill="#c8a820"/><ellipse cx="61" cy="27" rx="4" ry="6" fill="#e8c832"/><ellipse cx="79" cy="27" rx="4" ry="6" fill="#e8c832"/><line x1="66" y1="40" x2="64" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"/><line x1="74" y1="40" x2="76" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk3"><line x1="120" y1="8" x2="120" y2="22" stroke="#e84040" stroke-width="1.5"/><ellipse cx="120" cy="6" rx="3" ry="4" fill="#ff6060" stroke="#c02020" stroke-width="0.5"/><ellipse cx="120" cy="30" rx="9" ry="11" fill="#e84040"/><ellipse cx="120" cy="26" rx="7" ry="7" fill="#f05050"/><circle cx="117" cy="25" r="2" fill="white"/><circle cx="123" cy="25" r="2" fill="white"/><circle cx="117.5" cy="25.5" r="1" fill="#222"/><circle cx="123.5" cy="25.5" r="1" fill="#222"/><ellipse cx="120" cy="29" rx="5" ry="2.5" fill="#c02020"/><line x1="111" y1="28" x2="106" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="129" y1="28" x2="134" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="116" y1="40" x2="114" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/><line x1="124" y1="40" x2="126" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk4"><line x1="170" y1="6" x2="170" y2="20" stroke="#7b4faa" stroke-width="1.5"/><ellipse cx="170" cy="4" rx="4" ry="5" fill="#c090e0" stroke="#7b4faa" stroke-width="0.5"/><ellipse cx="170" cy="31" rx="11" ry="12" fill="#7b4faa"/><ellipse cx="170" cy="27" rx="9" ry="9" fill="#9060c0"/><circle cx="166" cy="26" r="2.5" fill="white"/><circle cx="174" cy="26" r="2.5" fill="white"/><circle cx="166.5" cy="26.5" r="1.2" fill="#222"/><circle cx="174.5" cy="26.5" r="1.2" fill="#222"/><ellipse cx="170" cy="31" rx="5" ry="2.5" fill="#5a3080"/><line x1="159" y1="29" x2="153" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="181" y1="29" x2="187" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="165" y1="42" x2="163" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/><line x1="175" y1="42" x2="177" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"/></g>
-  <g class="pk pk5"><line x1="220" y1="8" x2="220" y2="22" stroke="#ddd" stroke-width="1.5"/><ellipse cx="220" cy="6" rx="3" ry="4" fill="#ff88aa" stroke="#ddd" stroke-width="0.5"/><ellipse cx="220" cy="30" rx="8" ry="10" fill="white" stroke="#ddd" stroke-width="1"/><ellipse cx="220" cy="26" rx="6" ry="6" fill="#f8f8f8"/><circle cx="217" cy="25" r="2.5" fill="#ff4466"/><circle cx="223" cy="25" r="2.5" fill="#ff4466"/><circle cx="217.5" cy="25.5" r="1" fill="#222"/><circle cx="223.5" cy="25.5" r="1" fill="#222"/><line x1="212" y1="28" x2="207" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="228" y1="28" x2="233" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="216" y1="40" x2="214" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/><line x1="224" y1="40" x2="226" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"/></g>
-  <g class="pk pk6"><line x1="270" y1="6" x2="270" y2="16" stroke="#666" stroke-width="1.5"/><ellipse cx="270" cy="4" rx="3" ry="4" fill="#aaa" stroke="#666" stroke-width="0.5"/><ellipse cx="270" cy="28" rx="11" ry="10" fill="#555"/><ellipse cx="267" cy="24" rx="3" ry="2.5" fill="#777"/><ellipse cx="274" cy="23" rx="2.5" ry="2" fill="#777"/><circle cx="266" cy="24" r="2" fill="white"/><circle cx="274" cy="23" r="2" fill="white"/><circle cx="266.5" cy="24.5" r="1" fill="#222"/><circle cx="274.5" cy="23.5" r="1" fill="#222"/><line x1="260" y1="30" x2="255" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="280" y1="30" x2="285" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="265" y1="38" x2="263" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"/><line x1="275" y1="38" x2="277" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"/></g>
+  <g class="pk pk1"><line x1="20" y1="8" x2="20" y2="22" stroke="#4a90d9" stroke-width="1.5"></line><ellipse cx="20" cy="6" rx="3" ry="4" fill="white" stroke="#aaa" stroke-width="0.5"></ellipse><ellipse cx="20" cy="30" rx="9" ry="11" fill="#4a90d9"></ellipse><ellipse cx="20" cy="26" rx="7" ry="7" fill="#5aa0e8"></ellipse><circle cx="17" cy="25" r="2" fill="white"></circle><circle cx="23" cy="25" r="2" fill="white"></circle><circle cx="17.5" cy="25.5" r="1" fill="#222"></circle><circle cx="23.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="20" cy="29" rx="4" ry="2" fill="#3a7abf"></ellipse><line x1="11" y1="28" x2="6" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="29" y1="28" x2="34" y2="24" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="16" y1="40" x2="14" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line><line x1="24" y1="40" x2="26" y2="52" stroke="#4a90d9" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk2"><line x1="70" y1="8" x2="70" y2="22" stroke="#e8c832" stroke-width="1.5"></line><ellipse cx="70" cy="6" rx="3" ry="4" fill="#f5e070" stroke="#cca820" stroke-width="0.5"></ellipse><ellipse cx="70" cy="30" rx="9" ry="11" fill="#e8c832"></ellipse><ellipse cx="70" cy="26" rx="7" ry="7" fill="#f0d840"></ellipse><circle cx="67" cy="25" r="2" fill="white"></circle><circle cx="73" cy="25" r="2" fill="white"></circle><circle cx="67.5" cy="25.5" r="1" fill="#222"></circle><circle cx="73.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="70" cy="29" rx="4" ry="2" fill="#c8a820"></ellipse><ellipse cx="61" cy="27" rx="4" ry="6" fill="#e8c832"></ellipse><ellipse cx="79" cy="27" rx="4" ry="6" fill="#e8c832"></ellipse><line x1="66" y1="40" x2="64" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"></line><line x1="74" y1="40" x2="76" y2="52" stroke="#e8c832" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk3"><line x1="120" y1="8" x2="120" y2="22" stroke="#e84040" stroke-width="1.5"></line><ellipse cx="120" cy="6" rx="3" ry="4" fill="#ff6060" stroke="#c02020" stroke-width="0.5"></ellipse><ellipse cx="120" cy="30" rx="9" ry="11" fill="#e84040"></ellipse><ellipse cx="120" cy="26" rx="7" ry="7" fill="#f05050"></ellipse><circle cx="117" cy="25" r="2" fill="white"></circle><circle cx="123" cy="25" r="2" fill="white"></circle><circle cx="117.5" cy="25.5" r="1" fill="#222"></circle><circle cx="123.5" cy="25.5" r="1" fill="#222"></circle><ellipse cx="120" cy="29" rx="5" ry="2.5" fill="#c02020"></ellipse><line x1="111" y1="28" x2="106" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="129" y1="28" x2="134" y2="24" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="116" y1="40" x2="114" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line><line x1="124" y1="40" x2="126" y2="52" stroke="#e84040" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk4"><line x1="170" y1="6" x2="170" y2="20" stroke="#7b4faa" stroke-width="1.5"></line><ellipse cx="170" cy="4" rx="4" ry="5" fill="#c090e0" stroke="#7b4faa" stroke-width="0.5"></ellipse><ellipse cx="170" cy="31" rx="11" ry="12" fill="#7b4faa"></ellipse><ellipse cx="170" cy="27" rx="9" ry="9" fill="#9060c0"></ellipse><circle cx="166" cy="26" r="2.5" fill="white"></circle><circle cx="174" cy="26" r="2.5" fill="white"></circle><circle cx="166.5" cy="26.5" r="1.2" fill="#222"></circle><circle cx="174.5" cy="26.5" r="1.2" fill="#222"></circle><ellipse cx="170" cy="31" rx="5" ry="2.5" fill="#5a3080"></ellipse><line x1="159" y1="29" x2="153" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="181" y1="29" x2="187" y2="25" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="165" y1="42" x2="163" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line><line x1="175" y1="42" x2="177" y2="54" stroke="#7b4faa" stroke-width="2" stroke-linecap="round"></line></g>
+  <g class="pk pk5"><line x1="220" y1="8" x2="220" y2="22" stroke="#ddd" stroke-width="1.5"></line><ellipse cx="220" cy="6" rx="3" ry="4" fill="#ff88aa" stroke="#ddd" stroke-width="0.5"></ellipse><ellipse cx="220" cy="30" rx="8" ry="10" fill="white" stroke="#ddd" stroke-width="1"></ellipse><ellipse cx="220" cy="26" rx="6" ry="6" fill="#f8f8f8"></ellipse><circle cx="217" cy="25" r="2.5" fill="#ff4466"></circle><circle cx="223" cy="25" r="2.5" fill="#ff4466"></circle><circle cx="217.5" cy="25.5" r="1" fill="#222"></circle><circle cx="223.5" cy="25.5" r="1" fill="#222"></circle><line x1="212" y1="28" x2="207" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="228" y1="28" x2="233" y2="24" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="216" y1="40" x2="214" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line><line x1="224" y1="40" x2="226" y2="52" stroke="#ddd" stroke-width="1.5" stroke-linecap="round"></line></g>
+  <g class="pk pk6"><line x1="270" y1="6" x2="270" y2="16" stroke="#666" stroke-width="1.5"></line><ellipse cx="270" cy="4" rx="3" ry="4" fill="#aaa" stroke="#666" stroke-width="0.5"></ellipse><ellipse cx="270" cy="28" rx="11" ry="10" fill="#555"></ellipse><ellipse cx="267" cy="24" rx="3" ry="2.5" fill="#777"></ellipse><ellipse cx="274" cy="23" rx="2.5" ry="2" fill="#777"></ellipse><circle cx="266" cy="24" r="2" fill="white"></circle><circle cx="274" cy="23" r="2" fill="white"></circle><circle cx="266.5" cy="24.5" r="1" fill="#222"></circle><circle cx="274.5" cy="23.5" r="1" fill="#222"></circle><line x1="260" y1="30" x2="255" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="280" y1="30" x2="285" y2="27" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="265" y1="38" x2="263" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"></line><line x1="275" y1="38" x2="277" y2="48" stroke="#555" stroke-width="2" stroke-linecap="round"></line></g>
 </svg>
 </div>
-      <div class="hug-title">💝 需要愛的抱抱</div>
-      <div class="hug-sub">小隊長請注意！以下夥伴需要你今天主動關心 ✨</div>
+      <div class="hug-title">🎉 今日明星成員</div>
+      <div class="hug-sub">齊天戰神突擊隊有人超級衝！✨</div>
     </div>
     <div class="hug-cards">
       <div class="hug-card">
-        <div class="hug-name">⚠️ 林嘉慈</div>
-        <div class="hug-score">定課完成 1/3 ｜ 本週積分 2,720</div>
-        <div class="hug-block">
-          <div class="hug-label">📋 今日定課狀況</div>
-          <div class="hug-text">完成 1 項，尚差 2 項未打卡。已完成：親證分享、參加心成活動(x1)</div>
-        </div>
-        <div class="hug-block">
-          <div class="hug-label">🕐 近期活動時間</div>
-          <div class="hug-text">6/16 下午07:25 打拳打卡，6/15 下午09:34 心成活動</div>
-        </div>
-        <div class="hug-block">
-          <div class="hug-label">💌 建議行動</div>
-          <div class="hug-text">請小隊長今天確認她的定課補打狀況，並提醒還有天使通話等任務。</div>
-        </div>
+        <div class="hug-name">✅ 郭丞浤今日超猛衝刺！🔥</div>
+        <div class="hug-score">本週9260分，今日2980分，完成實體小組定聚＋親證分享＋天使通話等6項特殊任務</div>
+        <div class="hug-block"><div class="hug-label">💪 小隊長今日行動</div><div class="hug-text">帶著這份衝勁感染全組！提醒其他組員本週還有哪些任務可以跟上！</div></div>
       </div>
     </div>
   </div>
@@ -1786,23 +2180,23 @@ body {
         <div class="gc-row">
           <div class="gc-bar-wrap" onclick="toggleGap('g12chart_黃怡駿')">
             <div class="gc-name" style="color:#a78bfa">黃怡駿</div>
-            <div class="gc-track"><div class="gc-fill" style="width:37%;background:#a78bfa"><span class="gc-fill-txt">3/8</span></div></div>
-            <div class="gc-pct" style="color:#fbbf24">37%</div>
+            <div class="gc-track"><div class="gc-fill" style="width:62%;background:#a78bfa"><span class="gc-fill-txt">5/8</span></div></div>
+            <div class="gc-pct" style="color:#5ab878">62%</div>
             <div class="gc-arrow" id="arr_g12chart_黃怡駿">▼</div>
           </div>
           <div class="gc-detail" id="det_g12chart_黃怡駿">
-            <div class="gc-section-label">✅ 已完成（3 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 蓋雅的召喚</span><span class="gc-chip gc-done">✓ 親證分享</span><span class="gc-chip gc-done">✓ 參加心成活動(x1)</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（5 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 欣賞夥伴</span><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 圓夢計劃親證(x2)</span><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
+            <div class="gc-section-label">✅ 已完成（5 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 蓋雅的召喚</span><span class="gc-chip gc-done">✓ 欣賞夥伴</span><span class="gc-chip gc-done">✓ 天使通話</span><span class="gc-chip gc-done">✓ 親證分享</span><span class="gc-chip gc-done">✓ 參加心成活動(x1)</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（3 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 圓夢計劃親證(x2)</span><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
           </div>
         </div>
         <div class="gc-row">
           <div class="gc-bar-wrap" onclick="toggleGap('g12chart_林嘉慈')">
             <div class="gc-name" style="color:#fb923c">林嘉慈</div>
-            <div class="gc-track"><div class="gc-fill" style="width:25%;background:#fb923c"><span class="gc-fill-txt">2/8</span></div></div>
-            <div class="gc-pct" style="color:#fbbf24">25%</div>
+            <div class="gc-track"><div class="gc-fill" style="width:62%;background:#fb923c"><span class="gc-fill-txt">5/8</span></div></div>
+            <div class="gc-pct" style="color:#5ab878">62%</div>
             <div class="gc-arrow" id="arr_g12chart_林嘉慈">▼</div>
           </div>
           <div class="gc-detail" id="det_g12chart_林嘉慈">
-            <div class="gc-section-label">✅ 已完成（2 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 親證分享</span><span class="gc-chip gc-done">✓ 參加心成活動(x1)</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（6 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 蓋雅的召喚</span><span class="gc-chip gc-miss">✗ 欣賞夥伴</span><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 圓夢計劃親證(x2)</span><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
+            <div class="gc-section-label">✅ 已完成（5 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 親證分享</span><span class="gc-chip gc-done">✓ 欣賞夥伴</span><span class="gc-chip gc-done">✓ 天使通話</span><span class="gc-chip gc-done">✓ 圓夢計劃親證(x2)</span><span class="gc-chip gc-done">✓ 參加心成活動(x1)</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（3 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 蓋雅的召喚</span><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
           </div>
         </div>
         <div class="gc-row">
@@ -1819,23 +2213,23 @@ body {
         <div class="gc-row">
           <div class="gc-bar-wrap" onclick="toggleGap('g12chart_郭丞浤')">
             <div class="gc-name" style="color:#f87171">郭丞浤</div>
-            <div class="gc-track"><div class="gc-fill" style="width:62%;background:#f87171"><span class="gc-fill-txt">5/8</span></div></div>
-            <div class="gc-pct" style="color:#5ab878">62%</div>
+            <div class="gc-track"><div class="gc-fill" style="width:75%;background:#f87171"><span class="gc-fill-txt">6/8</span></div></div>
+            <div class="gc-pct" style="color:#5ab878">75%</div>
             <div class="gc-arrow" id="arr_g12chart_郭丞浤">▼</div>
           </div>
           <div class="gc-detail" id="det_g12chart_郭丞浤">
-            <div class="gc-section-label">✅ 已完成（5 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 蓋雅的召喚</span><span class="gc-chip gc-done">✓ 欣賞夥伴</span><span class="gc-chip gc-done">✓ 親證分享</span><span class="gc-chip gc-done">✓ 圓夢計劃親證(x2)</span><span class="gc-chip gc-done">✓ 參加心成活動(x1)</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（3 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
+            <div class="gc-section-label">✅ 已完成（6 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 蓋雅的召喚</span><span class="gc-chip gc-done">✓ 欣賞夥伴</span><span class="gc-chip gc-done">✓ 親證分享</span><span class="gc-chip gc-done">✓ 圓夢計劃親證(x2)</span><span class="gc-chip gc-done">✓ 參加心成活動(x1)</span><span class="gc-chip gc-done">✓ 天使通話</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（2 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 主題親證2</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
           </div>
         </div>
         <div class="gc-row">
           <div class="gc-bar-wrap" onclick="toggleGap('g12chart_洪煜棠')">
             <div class="gc-name" style="color:#60a5fa">洪煜棠</div>
-            <div class="gc-track"><div class="gc-fill" style="width:62%;background:#60a5fa"><span class="gc-fill-txt">5/8</span></div></div>
-            <div class="gc-pct" style="color:#5ab878">62%</div>
+            <div class="gc-track"><div class="gc-fill" style="width:75%;background:#60a5fa"><span class="gc-fill-txt">6/8</span></div></div>
+            <div class="gc-pct" style="color:#5ab878">75%</div>
             <div class="gc-arrow" id="arr_g12chart_洪煜棠">▼</div>
           </div>
           <div class="gc-detail" id="det_g12chart_洪煜棠">
-            <div class="gc-section-label">✅ 已完成（5 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 蓋雅的召喚</span><span class="gc-chip gc-done">✓ 欣賞夥伴</span><span class="gc-chip gc-done">✓ 圓夢計劃親證(x2)</span><span class="gc-chip gc-done">✓ 參加心成活動(x1)</span><span class="gc-chip gc-done">✓ 主題親證2</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（3 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 天使通話</span><span class="gc-chip gc-miss">✗ 親證分享</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
+            <div class="gc-section-label">✅ 已完成（6 項）</div><div class="gc-chips"><span class="gc-chip gc-done">✓ 蓋雅的召喚</span><span class="gc-chip gc-done">✓ 欣賞夥伴</span><span class="gc-chip gc-done">✓ 天使通話</span><span class="gc-chip gc-done">✓ 圓夢計劃親證(x2)</span><span class="gc-chip gc-done">✓ 參加心成活動(x1)</span><span class="gc-chip gc-done">✓ 主題親證2</span></div><div class="gc-section-label" style="margin-top:8px">⏳ 未完成（2 項）</div><div class="gc-chips"><span class="gc-chip gc-miss">✗ 親證分享</span><span class="gc-chip gc-miss">✗ 巔峰取經</span></div>
           </div>
         </div>
     </div>
@@ -1895,11 +2289,11 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-green">淑</div><div><div class="card-name">盧家淑</div><div class="card-role">沙悟淨（丁丁）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">33,540</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">5,180</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+3,120</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">34,200</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">5,840</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+660</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">當下之舞</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">破曉打拳</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name done">感恩冥想</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
@@ -1911,35 +2305,17 @@ body {
       <div class="task-row"><span class="task-name">巔峰取經</span><span class="badge miss">未做</span></div>
     </div>
 
-    <div class="member-card alert">
+    <div class="member-card">
       <div class="card-top"><div class="avatar av-amber">駿</div><div><div class="card-name">黃怡駿</div><div class="card-role">孫悟空（隊長）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">20,560</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">1,960</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+640</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">22,480</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">3,880</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+440</div></div></div>
       <div class="section-title">今日定課</div>
       <div class="task-row"><span class="task-num">1</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">破曉打拳</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
-<div class="section-title">本週特殊任務</div>
-      <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name warn">欣賞夥伴</span><span class="badge warn">待確認打卡</span></div>
-      <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name done">親證分享</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name">圓夢計劃親證(x2)</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name done">參加心成活動(x1)</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name">巔峰取經</span><span class="badge miss">未做</span></div>
-    </div>
-
-    <div class="member-card alert">
-      <div class="card-top"><div class="avatar av-red">慈</div><div><div class="card-name">林嘉慈</div><div class="card-role">豬八戒（樂樂）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">24,260</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">2,720</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+220</div></div></div>
-      <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
 <div class="section-title">本週特殊任務</div>
-      <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name warn">欣賞夥伴</span><span class="badge warn">待確認打卡</span></div>
-      <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-name done">天使通話</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">親證分享</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">圓夢計劃親證(x2)</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name done">參加心成活動(x1)</span><span class="badge done">✓</span></div>
@@ -1947,9 +2323,27 @@ body {
       <div class="task-row"><span class="task-name">巔峰取經</span><span class="badge miss">未做</span></div>
     </div>
 
-    <div class="member-card alert">
+    <div class="member-card">
+      <div class="card-top"><div class="avatar av-red">慈</div><div><div class="card-name">林嘉慈</div><div class="card-role">豬八戒（樂樂）</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">26,920</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">5,380</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+760</div></div></div>
+      <div class="section-title">今日定課</div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name done">破曉打拳</span><span class="badge done">✓</span></div>
+<div class="section-title">本週特殊任務</div>
+      <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-name done">天使通話</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-name done">親證分享</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-name done">圓夢計劃親證(x2)</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-name done">參加心成活動(x1)</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name">巔峰取經</span><span class="badge miss">未做</span></div>
+    </div>
+
+    <div class="member-card">
       <div class="card-top"><div class="avatar av-purple">玲</div><div><div class="card-name">許玲慧</div><div class="card-role">嫦娥（抱抱）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">22,600</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">32,500</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+31,000</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">22,900</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">32,800</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
       <div class="section-title">今日定課</div>
       <div class="task-row"><span class="task-num">1</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-num">2</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
@@ -1967,15 +2361,15 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-amber">丞</div><div><div class="card-name">郭丞浤</div><div class="card-role">哪吒（衝衝）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">31,260</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">4,280</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+1,120</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">36,240</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">9,260</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+2,980</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">破曉打拳</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">天使通話</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">親證分享</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">圓夢計劃親證(x2)</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">參加心成活動(x1)</span><span class="badge done">✓</span></div>
@@ -1983,17 +2377,17 @@ body {
       <div class="task-row"><span class="task-name">巔峰取經</span><span class="badge miss">未做</span></div>
     </div>
 
-    <div class="member-card alert">
+    <div class="member-card">
       <div class="card-top"><div class="avatar av-amber">煜</div><div><div class="card-name">洪煜棠</div><div class="card-role">唐三藏（副隊長）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">25,880</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">2,260</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+640</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">27,660</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">4,040</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+1,780</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">破曉打拳</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">天使通話</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name done">參加心成活動(x1)</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">天使通話</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">親證分享</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name done">圓夢計劃親證(x2)</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">參加心成活動(x1)</span><span class="badge done">✓</span></div>
@@ -2124,6 +2518,19 @@ function copyRally(btn) {
 
 showRallyDay(0);
 
+function xcCopy(el, text) {
+  const done = () => {
+    el.classList.add('copied');
+    el.querySelector('.xc-copy-btn').textContent = '✓ 已複製';
+    setTimeout(() => {
+      el.classList.remove('copied');
+      el.querySelector('.xc-copy-btn').textContent = '複製';
+    }, 2000);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => { const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);done(); });
+  } else { const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);done(); }
+}
 function copySource(btn) {
   const html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
   const done = () => {
@@ -2177,5 +2584,6 @@ function copyMsg(id, btn) {
   });
 }
 </script>
-</body>
-</html>
+
+
+</body></html>
