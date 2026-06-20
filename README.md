@@ -1033,7 +1033,7 @@ body {
   <div class="header-badge">筱君大隊</div>
   <h1>🏆 任務追蹤儀表板</h1>
   <div class="sub">第4週 6/15（一）～ 6/21（日）</div>
-  <div class="date">截至 6/20 07:17 更新（已含全隊25人）</div>
+  <div class="date">截至 6/20 17:30 更新（已含全隊25人）</div>
   <div class="week-tag">📊 第4週進行中（6/20）！本週特殊任務與定課持續累積中</div>
   <button class="source-copy-btn" id="sourceCopyBtn" onclick="copySource(this)">📋 複製整份原始碼（貼到 GitHub）</button>
 </div>
@@ -1092,35 +1092,51 @@ body {
 
     <div class="hug-cards">
       <div class="hug-card">
-        <div class="hug-name">⚠️ 黃芯璿</div>
-        <div class="hug-score">定課完成 2/3 ｜ 本週積分 500</div>
+        <div class="hug-name">🆘 鄒念穎</div>
+        <div class="hug-score">定課完成 0/3 ｜ 本週積分 400</div>
         <div class="hug-block">
           <div class="hug-label">📋 今日定課狀況</div>
-          <div class="hug-text">今日0分，尚有1項定課未打卡。本週特殊任務僅完成天使通話。</div>
+          <div class="hug-text">本週進度停滯，最後一次打卡是6/15，已連續多天未上線，本週特殊任務全數未做。</div>
         </div>
         <div class="hug-block">
           <div class="hug-label">🕐 近期活動時間</div>
-          <div class="hug-text">6/18 下午10:22 天使通話，6/18 上午10:30 打拳打卡</div>
+          <div class="hug-text">6/15 下午11:16 完成定課（亥子時入睡、五感恩、打拳）</div>
         </div>
         <div class="hug-block">
           <div class="hug-label">💌 建議行動</div>
-          <div class="hug-text">請小隊長今天關心一下她是否有困難需要幫助，鼓勵補上未完成定課。</div>
+          <div class="hug-text">已連續5天未打卡，請小隊長今天務必主動私訊關心，確認是否遇到困難。</div>
         </div>
       </div>
       <div class="hug-card">
-        <div class="hug-name">⚠️ 廖志裕</div>
-        <div class="hug-score">定課完成 3/3 ｜ 本週積分 6,860</div>
+        <div class="hug-name">⚠️ 黃芯璿</div>
+        <div class="hug-score">定課完成 1/3 ｜ 本週積分 800</div>
         <div class="hug-block">
           <div class="hug-label">📋 今日定課狀況</div>
-          <div class="hug-text">今日0分，最後打卡時間為6/18，今天尚未上線打卡。</div>
+          <div class="hug-text">今日+100分，尚有2項定課未打卡。本週特殊任務僅完成天使通話。</div>
         </div>
         <div class="hug-block">
           <div class="hug-label">🕐 近期活動時間</div>
-          <div class="hug-text">6/18 下午10:22 完成定課（流動情緒、五感恩、打拳）</div>
+          <div class="hug-text">6/20 上午11:46 打拳打卡</div>
         </div>
         <div class="hug-block">
           <div class="hug-label">💌 建議行動</div>
-          <div class="hug-text">本週進度良好，提醒他今天記得上線打卡。</div>
+          <div class="hug-text">請小隊長關心一下是否有困難需要幫助，鼓勵補上未完成定課。</div>
+        </div>
+      </div>
+      <div class="hug-card">
+        <div class="hug-name">⚠️ 王岑芯</div>
+        <div class="hug-score">定課完成 0/3 ｜ 本週積分 2,580</div>
+        <div class="hug-block">
+          <div class="hug-label">📋 今日定課狀況</div>
+          <div class="hug-text">今日0分，3項定課皆未打卡，最後打卡時間為6/19。</div>
+        </div>
+        <div class="hug-block">
+          <div class="hug-label">🕐 近期活動時間</div>
+          <div class="hug-text">6/19 下午01:49 完成定課（感恩冥想、亥子時入睡、一日一蔬食）</div>
+        </div>
+        <div class="hug-block">
+          <div class="hug-label">💌 建議行動</div>
+          <div class="hug-text">提醒今天記得回來打卡，避免中斷連續紀錄。</div>
         </div>
       </div>
     </div>
@@ -1305,11 +1321,11 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-purple">薏</div><div><div class="card-name">王薏涵</div><div class="card-role">孫悟空（隊長）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">28,660</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">6,060</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+1,140</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">29,100</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">6,500</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">破曉打拳</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name done">參加心成活動</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
@@ -1323,11 +1339,11 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-purple">岑</div><div><div class="card-name">王岑芯</div><div class="card-role">觀音菩薩（副隊長）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">21,980</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">2,580</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+1,380</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">21,980</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">2,580</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">感恩冥想</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">欣賞夥伴</span><span class="badge miss">未做</span></div>
@@ -1341,11 +1357,11 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-amber">宏</div><div><div class="card-name">王宏榮</div><div class="card-role">哪吒（衝衝）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">29,000</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">8,380</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+2,480</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">30,260</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">9,640</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+1,260</div></div></div>
       <div class="section-title">今日定課</div>
       <div class="task-row"><span class="task-num">1</span><span class="task-name done">當下之舞</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-num">2</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
@@ -1359,10 +1375,10 @@ body {
 
     <div class="member-card alert">
       <div class="card-top"><div class="avatar av-green">芯</div><div><div class="card-name">黃芯璿</div><div class="card-role">豬八戒（樂樂）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">14,200</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">500</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">14,500</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">800</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+100</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
       <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
@@ -1395,11 +1411,11 @@ body {
 
     <div class="member-card alert">
       <div class="card-top"><div class="avatar av-red">志</div><div><div class="card-name">廖志裕</div><div class="card-role">白龍馬（丁丁）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">19,460</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">6,860</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">20,220</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">7,620</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
@@ -1413,11 +1429,11 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-amber">雅</div><div><div class="card-name">黃雅琪</div><div class="card-role">龍女（抱抱）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">16,100</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">32,800</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+900</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">18,500</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">35,200</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+400</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">當下之舞</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name done">破曉打拳</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">欣賞夥伴</span><span class="badge miss">未做</span></div>
@@ -1457,31 +1473,15 @@ body {
     </div>
     <div class="hug-cards">
       <div class="hug-card">
-        <div class="hug-name">⚠️ 蔡鎔庄</div>
-        <div class="hug-score">定課完成 0/3 ｜ 本週積分 3,420</div>
+        <div class="hug-name">⚠️ 游文君</div>
+        <div class="hug-score">定課完成 0/3 ｜ 本週積分 38,820</div>
         <div class="hug-block">
           <div class="hug-label">📋 今日定課狀況</div>
-          <div class="hug-text">今日0分，3項定課皆未打卡，最後打卡時間為6/18。</div>
+          <div class="hug-text">今日0分，3項定課皆未打卡，最後打卡時間為6/19。</div>
         </div>
         <div class="hug-block">
           <div class="hug-label">🕐 近期活動時間</div>
-          <div class="hug-text">6/18 上午08:24 完成定課（打拳、流動情緒、亥子時入睡）</div>
-        </div>
-        <div class="hug-block">
-          <div class="hug-label">💌 建議行動</div>
-          <div class="hug-text">提醒今天記得上線打卡，本週進度尚可，別讓連續紀錄中斷。</div>
-        </div>
-      </div>
-      <div class="hug-card">
-        <div class="hug-name">⚠️ 羅萱</div>
-        <div class="hug-score">定課完成 0/3 ｜ 本週積分 35,400</div>
-        <div class="hug-block">
-          <div class="hug-label">📋 今日定課狀況</div>
-          <div class="hug-text">今日0分，3項定課皆未打卡，最後打卡時間為6/18。</div>
-        </div>
-        <div class="hug-block">
-          <div class="hug-label">🕐 近期活動時間</div>
-          <div class="hug-text">6/18 下午01:49 完成定課（一日一蔬食、五感恩、打拳）</div>
+          <div class="hug-text">6/19 下午05:59 完成定課（感恩冥想、流動情緒、五感恩）</div>
         </div>
         <div class="hug-block">
           <div class="hug-label">💌 建議行動</div>
@@ -1659,11 +1659,11 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-purple">庄</div><div><div class="card-name">蔡鎔庄</div><div class="card-role">龍太子（金金）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">34,040</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">3,420</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">35,960</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">5,340</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+960</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">欣賞夥伴</span><span class="badge miss">未做</span></div>
@@ -1677,10 +1677,10 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-green">霖</div><div><div class="card-name">游佳霖</div><div class="card-role">孫悟空（隊長）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">35,700</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">42,640</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+3,000</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">36,460</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">43,400</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+760</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name done">流動情緒(觀呼吸)</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-num">3</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
@@ -1695,35 +1695,35 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-amber">萱</div><div><div class="card-name">羅萱</div><div class="card-role">嫦娥（抱抱）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">25,680</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">35,400</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">28,040</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">37,760</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+880</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">當下之舞</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name">欣賞夥伴</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">天使通話</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">親證分享</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">圓夢計劃親證(x2)</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name">參加心成活動(x1)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">參加心成活動(x1)</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">主題親證2</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">巔峰取經</span><span class="badge done">✓</span></div>
     </div>
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-green">文</div><div><div class="card-name">游文君</div><div class="card-role">觀音菩薩（副隊長）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">30,380</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">38,820</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+3,900</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">30,380</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">38,820</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">感恩冥想</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">流動情緒(觀呼吸)</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name">欣賞夥伴</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-name done">天使通話</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">親證分享</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name">圓夢計劃親證(x2)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">圓夢計劃親證(x2)</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">參加心成活動(x1)</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name done">巔峰取經</span><span class="badge done">✓</span></div>
@@ -1731,17 +1731,17 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-green">依</div><div><div class="card-name">王依涵</div><div class="card-role">白龍馬（丁丁）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">26,200</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">8,500</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+4,700</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">26,420</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">8,720</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+4,920</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">破曉打拳</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">每日五感恩</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
 <div class="section-title">本週特殊任務</div>
-      <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">天使通話</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">親證分享</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name warn">圓夢計劃親證(x2)</span><span class="badge warn">待確認打卡</span></div>
+      <div class="task-row"><span class="task-name done">圓夢計劃親證(x2)</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">參加心成活動(x1)</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">巔峰取經</span><span class="badge miss">未做</span></div>
@@ -1749,17 +1749,17 @@ body {
 
     <div class="member-card alert">
       <div class="card-top"><div class="avatar av-amber">萱</div><div><div class="card-name">李雯萱</div><div class="card-role">豬八戒（樂樂）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">26,820</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">8,120</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+4,020</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">27,160</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">8,460</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+340</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">流動情緒(觀呼吸)</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">欣賞夥伴</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name done">親證分享</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name">圓夢計劃親證(x2)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">圓夢計劃親證(x2)</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">參加心成活動(x1)</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">主題親證2</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">巔峰取經</span><span class="badge miss">未做</span></div>
@@ -1793,31 +1793,47 @@ body {
     </div>
     <div class="hug-cards">
       <div class="hug-card">
-        <div class="hug-name">⚠️ 許哲豪</div>
-        <div class="hug-score">定課完成 0/3 ｜ 本週積分 3,860</div>
+        <div class="hug-name">⚠️ 黃湘庭</div>
+        <div class="hug-score">定課完成 0/3 ｜ 本週積分 5,000</div>
         <div class="hug-block">
           <div class="hug-label">📋 今日定課狀況</div>
-          <div class="hug-text">今日0分，3項定課皆未打卡，最後打卡時間為6/18。</div>
+          <div class="hug-text">今日+240分，但3項定課皆尚未打卡，最後定課打卡時間為6/18。</div>
         </div>
         <div class="hug-block">
           <div class="hug-label">🕐 近期活動時間</div>
-          <div class="hug-text">6/18 下午09:59 完成定課（破曉打拳、亥子時入睡、五感恩、打拳）</div>
+          <div class="hug-text">6/20 上午10:03 完成圓夢計劃親證、欣賞夥伴</div>
         </div>
         <div class="hug-block">
           <div class="hug-label">💌 建議行動</div>
-          <div class="hug-text">提醒今天記得回來打卡，本週進度尚可，別中斷連續紀錄。</div>
+          <div class="hug-text">提醒今天記得補上3項定課打卡。</div>
+        </div>
+      </div>
+      <div class="hug-card">
+        <div class="hug-name">⚠️ 許哲豪</div>
+        <div class="hug-score">定課完成 0/3 ｜ 本週積分 4,840</div>
+        <div class="hug-block">
+          <div class="hug-label">📋 今日定課狀況</div>
+          <div class="hug-text">今日+120分，但3項定課皆尚未打卡，最後定課打卡時間為6/19。</div>
+        </div>
+        <div class="hug-block">
+          <div class="hug-label">🕐 近期活動時間</div>
+          <div class="hug-text">6/20 上午11:30 欣賞夥伴打卡</div>
+        </div>
+        <div class="hug-block">
+          <div class="hug-label">💌 建議行動</div>
+          <div class="hug-text">提醒今天記得補上3項定課打卡。</div>
         </div>
       </div>
       <div class="hug-card">
         <div class="hug-name">⚠️ 王芷盈</div>
-        <div class="hug-score">定課完成 0/3 ｜ 本週積分 2,900</div>
+        <div class="hug-score">定課完成 0/3 ｜ 本週積分 4,500</div>
         <div class="hug-block">
           <div class="hug-label">📋 今日定課狀況</div>
-          <div class="hug-text">今日0分，3項定課皆未打卡，最後打卡時間為6/18。</div>
+          <div class="hug-text">今日0分，3項定課皆未打卡，最後打卡時間為6/19。</div>
         </div>
         <div class="hug-block">
           <div class="hug-label">🕐 近期活動時間</div>
-          <div class="hug-text">6/18 下午10:08 完成定課（當下之舞、五感恩、打拳）</div>
+          <div class="hug-text">6/19 下午10:03 完成定課（圓夢計劃親證、參加心成活動、當下之舞）</div>
         </div>
         <div class="hug-block">
           <div class="hug-label">💌 建議行動</div>
@@ -1826,14 +1842,14 @@ body {
       </div>
       <div class="hug-card">
         <div class="hug-name">⚠️ 賴冠臻</div>
-        <div class="hug-score">定課完成 0/3 ｜ 本週積分 1,000</div>
+        <div class="hug-score">定課完成 0/3 ｜ 本週積分 1,300</div>
         <div class="hug-block">
           <div class="hug-label">📋 今日定課狀況</div>
-          <div class="hug-text">今日+300分，但3項定課尚未全部打卡。</div>
+          <div class="hug-text">今日0分，3項定課皆未打卡，最後打卡時間為6/19。</div>
         </div>
         <div class="hug-block">
           <div class="hug-label">🕐 近期活動時間</div>
-          <div class="hug-text">6/19 上午01:09 蓋雅的召喚打卡</div>
+          <div class="hug-text">6/19 下午10:32 完成定課（感恩冥想、五感恩、一日一蔬食）</div>
         </div>
         <div class="hug-block">
           <div class="hug-label">💌 建議行動</div>
@@ -2012,10 +2028,10 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-purple">筱</div><div><div class="card-name">郭筱婷</div><div class="card-role">孫悟空（隊長）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">31,300</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">6,260</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+2,080</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">32,060</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">7,020</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+760</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">流動情緒(觀呼吸)</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">破曉打拳</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name done">當下之舞</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name done">亥/子時入睡</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-num">3</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
@@ -2030,14 +2046,14 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-amber">湘</div><div><div class="card-name">黃湘庭</div><div class="card-role">豬八戒（樂樂）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">29,060</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">4,760</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+1,260</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">29,300</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">5,000</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+240</div></div></div>
       <div class="section-title">今日定課</div>
-      <div class="task-row"><span class="task-num">1</span><span class="task-name done">當下之舞</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">2</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-num">3</span><span class="task-name done">打拳</span><span class="badge done">✓</span></div>
+      <div class="task-row"><span class="task-num">1</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
+      <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name done">蓋雅的召喚</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name">欣賞夥伴</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">天使通話</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">親證分享</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name done">圓夢計劃親證(x2)</span><span class="badge done">✓</span></div>
@@ -2048,14 +2064,14 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-amber">哲</div><div><div class="card-name">許哲豪</div><div class="card-role">哪吒（衝衝）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">28,240</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">3,860</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">29,220</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">4,840</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+120</div></div></div>
       <div class="section-title">今日定課</div>
       <div class="task-row"><span class="task-num">1</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
       <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
       <div class="task-row"><span class="task-num">3</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
 <div class="section-title">本週特殊任務</div>
       <div class="task-row"><span class="task-name">蓋雅的召喚</span><span class="badge miss">未做</span></div>
-      <div class="task-row"><span class="task-name">欣賞夥伴</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">欣賞夥伴</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">天使通話</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">親證分享</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">圓夢計劃親證(x2)</span><span class="badge miss">未做</span></div>
@@ -2066,7 +2082,7 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-green">惠</div><div><div class="card-name">陳惠玲</div><div class="card-role">嫦娥（抱抱）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">29,120</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">6,420</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+1,480</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">29,880</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">7,180</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+760</div></div></div>
       <div class="section-title">今日定課</div>
       <div class="task-row"><span class="task-num">1</span><span class="task-name done">感恩冥想</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-num">2</span><span class="task-name done">一日一蔬食</span><span class="badge done">✓</span></div>
@@ -2084,7 +2100,7 @@ body {
 
     <div class="member-card">
       <div class="card-top"><div class="avatar av-red">芷</div><div><div class="card-name">王芷盈</div><div class="card-role">沙悟淨（丁丁）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">21,200</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">2,900</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">22,800</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">4,500</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
       <div class="section-title">今日定課</div>
       <div class="task-row"><span class="task-num">1</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
       <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
@@ -2095,14 +2111,14 @@ body {
       <div class="task-row"><span class="task-name done">天使通話</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">親證分享</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name done">圓夢計劃親證(x2)</span><span class="badge done">✓</span></div>
-      <div class="task-row"><span class="task-name">參加心成活動(x1)</span><span class="badge miss">未做</span></div>
+      <div class="task-row"><span class="task-name done">參加心成活動(x1)</span><span class="badge done">✓</span></div>
       <div class="task-row"><span class="task-name">主題親證2</span><span class="badge miss">未做</span></div>
       <div class="task-row"><span class="task-name">巔峰取經</span><span class="badge miss">未做</span></div>
     </div>
 
     <div class="member-card alert">
       <div class="card-top"><div class="avatar av-red">冠</div><div><div class="card-name">賴冠臻</div><div class="card-role">唐三藏（副隊長）</div></div></div>
-      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">14,300</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">1,000</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val good">+300</div></div></div>
+      <div class="scores"><div class="score-box"><div class="score-label">總分</div><div class="score-val">14,600</div></div><div class="score-box"><div class="score-label">本週</div><div class="score-val week">1,300</div></div><div class="score-box"><div class="score-label">今日</div><div class="score-val bad">0</div></div></div>
       <div class="section-title">今日定課</div>
       <div class="task-row"><span class="task-num">1</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
       <div class="task-row"><span class="task-num">2</span><span class="task-name">未完成</span><span class="badge miss">未完成</span></div>
@@ -2449,7 +2465,7 @@ body {
   </div>
 </div>
 
-<div class="footer">筱君大隊任務追蹤 · 截至 6/20 07:17 更新</div>
+<div class="footer">筱君大隊任務追蹤 · 截至 6/20 17:30 更新</div>
 
 <script>
 // ─── 58天精神喊話 ──────────────────────────────────────────
